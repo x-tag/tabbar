@@ -715,13 +715,10 @@ var flags = scope.flags;
 
 // native document.register?
 
-var hasNative = Boolean(document.webkitRegister || document.register);
+var hasNative = Boolean(document.register);
 var useNative = !flags.register && hasNative;
 
 if (useNative) {
-
-  // normalize
-  document.register = document.register || document.webkitRegister;
 
   // stub
   var nop = function() {};
@@ -791,7 +788,7 @@ if (useNative) {
     if (name.indexOf('-') < 0) {
       // TODO(sjmiles): replace with more appropriate error (EricB can probably
       // offer guidance)
-      throw new Error('document.register: first argument `name` must contain a dash (\'-\'). Argument was \'' + String(name) + '\'.');
+      throw new Error('document.register: first argument (\'name\') must contain a dash (\'-\'). Argument provided was \'' + String(name) + '\'.');
     }
     // record name
     definition.name = name;
@@ -1068,9 +1065,9 @@ license that can be found in the LICENSE file.
 
 var logFlags = window.logFlags || {};
 
-// walk the subtree rooted at node, applying 'find(element, data)' function 
+// walk the subtree rooted at node, applying 'find(element, data)' function
 // to each element
-// if 'find' returns true for 'element', do not search element's subtree  
+// if 'find' returns true for 'element', do not search element's subtree
 function findAll(node, find, data) {
   var e = node.firstElementChild;
   if (!e) {
@@ -1090,14 +1087,14 @@ function findAll(node, find, data) {
 
 // walk all shadowRoots on a given node.
 function forRoots(node, cb) {
-  var root = node.webkitShadowRoot;
+  var root = node.shadowRoot;
   while(root) {
     forSubtree(root, cb);
     root = root.olderShadowRoot;
   }
 }
 
-// walk the subtree rooted at node, including descent into shadow-roots, 
+// walk the subtree rooted at node, including descent into shadow-roots,
 // applying 'cb' to each element
 function forSubtree(node, cb) {
   //logFlags.dom && node.childNodes && node.childNodes.length && console.group('subTree: ', node);
@@ -1115,7 +1112,7 @@ function forSubtree(node, cb) {
 function added(node) {
   if (upgrade(node)) {
     insertedNode(node);
-    return true; 
+    return true;
   }
   inserted(node);
 }
@@ -1124,7 +1121,7 @@ function added(node) {
 function addedSubtree(node) {
   forSubtree(node, function(e) {
     if (added(e)) {
-      return true; 
+      return true;
     }
   });
 }
@@ -1157,9 +1154,50 @@ function insertedNode(node) {
   }
 }
 
-// TODO(sjmiles): if there are descents into trees that can never have inDocument(*) true, fix this
+
+// TODO(sorvell): on platforms without MutationObserver, mutations may not be 
+// reliable and therefore entered/leftView are not reliable.
+// To make these callbacks less likely to fail, we defer all inserts and removes
+// to give a chance for elements to be inserted into dom. 
+// This ensures enteredViewCallback fires for elements that are created and 
+// immediately added to dom.
+var hasPolyfillMutations = (!window.MutationObserver ||
+    (window.MutationObserver === window.JsMutationObserver));
+scope.hasPolyfillMutations = hasPolyfillMutations;
+
+var isPendingMutations = false;
+var pendingMutations = [];
+function deferMutation(fn) {
+  pendingMutations.push(fn);
+  if (!isPendingMutations) {
+    isPendingMutations = true;
+    var async = (window.Platform && window.Platform.endOfMicrotask) ||
+        setTimeout;
+    async(takeMutations);
+  }
+}
+
+function takeMutations() {
+  isPendingMutations = false;
+  var $p = pendingMutations;
+  for (var i=0, l=$p.length, p; (i<l) && (p=$p[i]); i++) {
+    p();
+  }
+  pendingMutations = [];
+}
 
 function inserted(element) {
+  if (hasPolyfillMutations) {
+    deferMutation(function() {
+      _inserted(element);
+    });
+  } else {
+    _inserted(element);
+  }
+}
+
+// TODO(sjmiles): if there are descents into trees that can never have inDocument(*) true, fix this
+function _inserted(element) {
   // TODO(sjmiles): it's possible we were inserted and removed in the space
   // of one microtask, in which case we won't be 'inDocument' here
   // But there are other cases where we are testing for inserted without
@@ -1170,7 +1208,7 @@ function inserted(element) {
   // TODO(sjmiles): when logging, do work on all custom elements so we can
   // track behavior even when callbacks not defined
   //console.log('inserted: ', element.localName);
-  if (element.enteredDocumentCallback || (element.__upgraded__ && logFlags.dom)) {
+  if (element.enteredViewCallback || (element.__upgraded__ && logFlags.dom)) {
     logFlags.dom && console.group('inserted:', element.localName);
     if (inDocument(element)) {
       element.__inserted = (element.__inserted || 0) + 1;
@@ -1182,9 +1220,9 @@ function inserted(element) {
       if (element.__inserted > 1) {
         logFlags.dom && console.warn('inserted:', element.localName,
           'insert/remove count:', element.__inserted)
-      } else if (element.enteredDocumentCallback) {
+      } else if (element.enteredViewCallback) {
         logFlags.dom && console.log('inserted:', element.localName);
-        element.enteredDocumentCallback();
+        element.enteredViewCallback();
       }
     }
     logFlags.dom && console.groupEnd();
@@ -1198,10 +1236,21 @@ function removedNode(node) {
   });
 }
 
+
+function removed(element) {
+  if (hasPolyfillMutations) {
+    deferMutation(function() {
+      _removed(element);
+    });
+  } else {
+    _removed(element);
+  }
+}
+
 function removed(element) {
   // TODO(sjmiles): temporary: do work on all custom elements so we can track
   // behavior even when callbacks not defined
-  if (element.leftDocumentCallback || (element.__upgraded__ && logFlags.dom)) {
+  if (element.leftViewCallback || (element.__upgraded__ && logFlags.dom)) {
     logFlags.dom && console.log('removed:', element.localName);
     if (!inDocument(element)) {
       element.__inserted = (element.__inserted || 0) - 1;
@@ -1213,8 +1262,8 @@ function removed(element) {
       if (element.__inserted < 0) {
         logFlags.dom && console.warn('removed:', element.localName,
             'insert/remove count:', element.__inserted)
-      } else if (element.leftDocumentCallback) {
-        element.leftDocumentCallback();
+      } else if (element.leftViewCallback) {
+        element.leftViewCallback();
       }
     }
   }
@@ -1222,8 +1271,10 @@ function removed(element) {
 
 function inDocument(element) {
   var p = element;
+  var doc = window.ShadowDOMPolyfill &&
+      window.ShadowDOMPolyfill.wrapIfNeeded(document) || document;
   while (p) {
-    if (p == element.ownerDocument) {
+    if (p == doc) {
       return true;
     }
     p = p.parentNode || p.host;
@@ -1231,10 +1282,10 @@ function inDocument(element) {
 }
 
 function watchShadow(node) {
-  if (node.webkitShadowRoot && !node.webkitShadowRoot.__watched) {
+  if (node.shadowRoot && !node.shadowRoot.__watched) {
     logFlags.dom && console.log('watching shadow-root for: ', node.localName);
     // watch all unwatched roots...
-    var root = node.webkitShadowRoot;
+    var root = node.shadowRoot;
     while (root) {
       watchRoot(root);
       root = root.olderShadowRoot;
@@ -1306,6 +1357,7 @@ var observer = new MutationObserver(handler);
 function takeRecords() {
   // TODO(sjmiles): ask Raf why we have to call handler ourselves
   handler(observer.takeRecords());
+  takeMutations();
 }
 
 var forEach = Array.prototype.forEach.call.bind(Array.prototype.forEach);
@@ -2169,7 +2221,7 @@ if (document.readyState === 'complete') {
   }
 
 // Events
-  
+
   function delegateAction(pseudo, event) {
     var target = query(this, pseudo.value).filter(function(node){
       return node == event.target || node.contains ? node.contains(event.target) : null;
@@ -2210,7 +2262,7 @@ if (document.readyState === 'complete') {
       value: base[key]
     });
   }
-  
+
   var skipProps = {};
   for (var z in document.createEvent('CustomEvent')) skipProps[z] = 1;
   function inheritEvent(event, base){
@@ -2362,7 +2414,7 @@ if (document.readyState === 'complete') {
         }
       };
 
-      if (tag.lifecycle.inserted) tag.prototype.enteredDocumentCallback = { value: tag.lifecycle.inserted, enumerable: true };
+      if (tag.lifecycle.inserted) tag.prototype.enteredViewCallback = { value: tag.lifecycle.inserted, enumerable: true };
       if (tag.lifecycle.removed) tag.prototype.leftDocumentCallback = { value: tag.lifecycle.removed, enumerable: true };
       if (tag.lifecycle.attributeChanged) tag.prototype.attributeChangedCallback = { value: tag.lifecycle.attributeChanged, enumerable: true };
 
@@ -2410,11 +2462,13 @@ if (document.readyState === 'complete') {
               .constructor).prototype :
           win.HTMLElement.prototype;
 
-      return doc.register(_name, {
-        'extends': options['extends'],
+      var definition = {
         'prototype': Object.create(elementProto, tag.prototype)
-      });
-
+      };
+      if (options['extends']) {
+        definition['extends'] = options['extends'];
+      }
+      return doc.register(_name, definition);
     },
 
     /* Exposed Variables */
@@ -2695,7 +2749,7 @@ if (document.readyState === 'complete') {
     },
 
   /*** Events ***/
-    
+
     parseEvent: function(type, fn) {
       var pseudos = type.split(':'),
           key = pseudos.shift(),
@@ -2717,7 +2771,7 @@ if (document.readyState === 'complete') {
       event.condition = function(e){
         var t = e.touches, tt = e.targetTouches;
         return condition.apply(this, toArray(arguments));
-      }; 
+      };
       var stack = xtag.applyPseudos(event.chain, fn, event._pseudos, event);
       event.stack = function(e){
         var t = e.touches, tt = e.targetTouches;
@@ -2898,8 +2952,9 @@ var touchReset = {
 
 if (win.TouchEvent) {
   for (z in TouchEventProto) {
-    win.TouchEvent.prototype[z] = TouchEventProto[z];
-    Object.defineProperty(win.TouchEvent.prototype, z, TouchEventProto[z]);
+    var desc = Object.getOwnPropertyDescriptor(win.TouchEvent.prototype, z);
+    if (desc) win.TouchEvent.prototype[z] = TouchEventProto[z];
+    else Object.defineProperty(win.TouchEvent.prototype, z, TouchEventProto[z]);
   }
 }
 
@@ -2982,11 +3037,1217 @@ if (win.TouchEvent) {
     }
   };
 
+  win.xtag = xtag;
   if (typeof define == 'function' && define.amd) define(xtag);
-  else win.xtag = xtag;
 
   doc.addEventListener('WebComponentsReady', function(){
     xtag.fireEvent(doc.body, 'DOMComponentsLoaded');
   });
+
+})();
+
+(function(){
+    var BEFORE_ANIM_ATTR = "_before-animation";
+
+    /** HistoryStack
+    *
+    * a generic stack implementation intended for keeping track of state history
+    *
+    * constructor params:
+    *    validatorFn             (optional) a function taking a single state and
+    *                            returns a Boolean, with false indicating an
+    *                            invalid state. If not set, will always return
+    *                            true.
+    *    itemCap                 (optional) the maximum number of items to keep
+    *                            in the stack at a time. If not set, will default
+    *                            to HistoryStack.DEFAULT_CAP. If set to "none",
+    *                            will allow inf_sanitizeCardAttrse items in the stack.
+    **/
+    function HistoryStack(validatorFn, itemCap){
+        this._historyStack = [];
+        this.currIndex = -1;
+
+        // .itemCap setter takes care of sanitizing and setting ._itemCap value
+        this._itemCap = undefined;
+        this.itemCap = itemCap;
+
+        this._validatorFn = (validatorFn) ? validatorFn :
+                                            function(x){ return true; };
+    }
+
+    var HISTORYSTACK_PROTOTYPE = HistoryStack.prototype;
+    /** HistoryStack.pushState : (user-defined)
+    *
+    * adds a state to the stack as the most recent state and sets it as the
+    * current state
+    *
+    * also handles capping the maximum number of states
+    **/
+    HISTORYSTACK_PROTOTYPE.pushState = function(newState){
+        if(this.canRedo){
+             // remove all future items, if any exist
+            this._historyStack.splice(this.currIndex + 1,
+                                      this._historyStack.length -
+                                            (this.currIndex + 1));
+        }
+        this._historyStack.push(newState);
+        this.currIndex = this._historyStack.length - 1;
+
+        this.sanitizeStack();
+
+        // remove oldest items to cap number of items in history
+        if(this._itemCap !== "none" &&
+           this._historyStack.length > this._itemCap)
+        {
+            var len = this._historyStack.length;
+            this._historyStack.splice(0, len - this._itemCap);
+
+            this.currIndex = this._historyStack.length - 1;
+        }
+    };
+
+
+    /** HistoryStack.sanitizeStack
+    *
+    * removes consecutive duplicate states and also removes all invalid states
+    * that fail to pass the validatorFn
+    **/
+    HISTORYSTACK_PROTOTYPE.sanitizeStack = function(){
+        var validatorFn = this._validatorFn;
+        var lastValidState;
+        var i = 0;
+        while(i < this._historyStack.length){
+            var state = this._historyStack[i];
+            if((state !== lastValidState) && validatorFn(state))
+            {
+                lastValidState = state;
+                i++;
+            }
+            else{
+                this._historyStack.splice(i, 1);
+                if(i <= this.currIndex){
+                    this.currIndex--;
+                }
+            }
+        }
+    };
+
+
+    /** HistoryStack.forwards
+    *
+    * moves one state towards the most recent state
+    **/
+    HISTORYSTACK_PROTOTYPE.forwards = function(){
+        if(this.canRedo){
+            this.currIndex++;
+        }
+        this.sanitizeStack();
+    };
+
+
+    /** HistoryStack.forwards
+    *
+    * moves one state back towards the oldest state
+    **/
+    HISTORYSTACK_PROTOTYPE.backwards = function(){
+        if(this.canUndo){
+            this.currIndex--;
+        }
+        this.sanitizeStack();
+    };
+
+    Object.defineProperties(HISTORYSTACK_PROTOTYPE, {
+        /** DEFAULT_CAP
+        *
+        * the default maximum cap on the number of states in the stack
+        **/
+        "DEFAULT_CAP": {
+            value: 10
+        },
+        /** itemCap
+        *
+        *  get and set the maximum number of items to keep in the stack at a
+        *  time. If set to "none", will allow inf_sanitizeCardAttrse items in the stack.
+        **/
+        "itemCap": {
+            get: function(){
+                return this._itemCap;
+            },
+            set: function(newCap){
+                if(newCap === undefined){
+                    this._itemCap = this.DEFAULT_CAP;
+                }
+                else if(newCap === "none")
+                {
+                    this._itemCap = "none";
+                }
+                else{
+                    var num = parseInt(newCap, 10);
+                    if(isNaN(newCap) || newCap <= 0){
+                        throw "attempted to set invalid item cap: " + newCap;
+                    }
+
+                    this._itemCap = num;
+                }
+            }
+        },
+        /** canUndo
+        *
+        * returns true if we are not at the oldest item in the stack
+        **/
+        "canUndo": {
+            get: function(){
+                return this.currIndex > 0;
+            }
+        },
+        /** canRedo
+        *
+        * returns true if we are not at the newest item in the stack
+        **/
+        "canRedo": {
+            get: function(){
+                return this.currIndex < this._historyStack.length-1;
+            }
+        },
+        /** numStates
+        *
+        * as you'd expect, returns the number of states in the history stack
+        **/
+        "numStates":{
+            get: function(){
+                return this._historyStack.length;
+            }
+        },
+        /** currState
+        *
+        * returns the state at the currIndex in the history stack
+        **/
+        "currState": {
+            get: function(){
+                var index = this.currIndex;
+                if(0 <= index && index < this._historyStack.length){
+                    return this._historyStack[index];
+                }
+                return null;
+            }
+        }
+    });
+
+
+    /** HELPERS **/
+
+    /** getDurationStr: (DOM) => String
+    *
+    * returns the computed style value of the given element's CSS transition
+    * duration property
+    **/
+    function getDurationStr(elem){
+        var style = window.getComputedStyle(elem);
+        var browserDurationName = xtag.prefix.js+"TransitionDuration";
+
+        if(style.transitionDuration){
+            return style.transitionDuration;
+        }
+        else{
+            return style[browserDurationName];
+        }
+    }
+
+    /** durationStrToMs: (String) => Number
+    *
+    * given a string in an acceptable format for a css transition duration,
+    * parse out and return the number of milliseconds this represents
+    **/
+    function durationStrToMs(str){
+        if(typeof(str) !== typeof("")){
+            return 0;
+        }
+
+        var reg = /^(\d*\.?\d+)(m?s)$/;
+        var matchInfo = str.toLowerCase().match(reg);
+
+        if(matchInfo){
+            var strVal = matchInfo[1];
+            var unit = matchInfo[2];
+
+            var val = parseFloat(strVal);
+            if(isNaN(val)){
+                throw "value error";
+            }
+
+            if(unit === "s"){
+                return val * 1000;
+            }
+            else if (unit === "ms"){
+                return val;
+            }
+            else{
+                throw "unit error";
+            }
+        }
+        else{
+            return 0;
+        }
+    }
+
+    /** posModulo : (Number, Number) => Number
+    * hacky workaround to get Python-esque modding so that doing
+    * negative modulos return positive numbers
+    * ex: -5 % 3 should return 1 instead of -2
+    **/
+    function posModulo(x, divisor){
+        return ((x % divisor) + divisor) % divisor;
+    }
+
+    /** _getAllCards : (DOM) => DOM array
+    *
+    * simply returns a list of all x-card DOM elements in the given
+    * DOM element
+    **/
+    function _getAllCards(elem){
+        return xtag.queryChildren(elem, "x-card");
+    }
+
+    /** _getCardAt : (DOM, Number) => DOM/null
+     *
+     * return the card at the given index in the given deck DOM
+     *
+     * returns null if no such card exists
+    **/
+    function _getCardAt(deck, targetIndex){
+        var cards = _getAllCards(deck);
+
+        return (isNaN(parseInt(targetIndex, 10)) || targetIndex < 0 ||
+                targetIndex >= cards.length) ? null : cards[targetIndex];
+    }
+
+    /** _getCardIndex: (DOM, DOM) => Number
+    *
+    * returns the index of the given x-card in the deck
+    * returns -1 if the given card does not exist in this deck
+    **/
+    function _getCardIndex(deck, card){
+        var allCards = _getAllCards(deck);
+
+        return allCards.indexOf(card);
+    }
+
+    /**  _animateCardReplacement : (DOM, DOM, DOM, string, Boolean)
+    *
+    * given a transform data map and the callbacks to fire during an animation,
+    * will animate the transition of replacing oldCard with newCard in the given
+    * deck
+    *
+    * fires a 'shufflestart' event on the x-deck when cards are in position to
+    * animate, but have not yet done so
+    *
+    * fires a 'shuffleend' event on the x-deck when the cards have finished
+    * their transition animations
+    *
+    * params:
+    *    deck                   the x-deck DOM element we are working in
+    *    oldCard                the x-card DOM element we are replacing
+    *    newCard                the x-card DOM element we are replacing
+    *                            the oldCard with
+    *    cardAnimName           the name of the animation type to use
+    *    isReverse               whether or not the animation should be reversed
+    **/
+    function _animateCardReplacement(deck, oldCard, newCard,
+                                      cardAnimName, isReverse){
+        deck.xtag._selectedCard = newCard;
+        var animTimeStamp = new Date();
+        deck.xtag._lastAnimTimestamp = animTimeStamp;
+
+        // set up an attribute-cleaning up function and callback caller function
+        // that will be fired when the animation is completed
+        var _onComplete = function(){
+            // for synchronization purposes, only set these attributes if this
+            // is actually the most recently fired timestamp
+            // otherwise, older animations interrupt newer animations and
+            // remove attributes, causing graphical flicker
+            if(animTimeStamp === deck.xtag._lastAnimTimestamp){
+                _sanitizeCardAttrs(deck);
+                xtag.fireEvent(deck, "shuffleend",
+                               {detail: {oldCard: oldCard,
+                                         newCard: newCard}});
+            }
+        };
+
+        // abort redundant transitions
+        if (newCard === oldCard){
+            _onComplete();
+            return;
+        }
+
+        var oldCardAnimReady = false;
+        var newCardAnimReady = false;
+        var animationStarted = false;
+
+        // define a helper function to call
+        // when both cards are ready to animate;
+        // necessary so that card additions aren't transitioning into the void
+        // and graphically flickering
+        var _attemptBeforeCallback = function(){
+            if(oldCardAnimReady && newCardAnimReady){
+                _getAllCards(deck).forEach(function(card){
+                    card.removeAttribute("selected");
+                    card.removeAttribute("leaving");
+                });
+                oldCard.setAttribute("leaving", true);
+                newCard.setAttribute("selected", true);
+                deck.xtag._selectedCard = newCard;
+                deck.selectedIndex = _getCardIndex(deck, newCard);
+                if(isReverse){
+                    oldCard.setAttribute("reverse", true);
+                    newCard.setAttribute("reverse", true);
+                }
+                xtag.fireEvent(deck, "shufflestart",
+                               {detail: {oldCard: oldCard,
+                                         newCard: newCard}});
+            }
+        };
+
+        // define a helper function to attempt an animation only when both
+        // cards are ready to animate
+        var _attemptAnimation = function(){
+            if(animationStarted){
+                return;
+            }
+            if(!(oldCardAnimReady && newCardAnimReady))
+            {
+                return;
+            }
+            _doAnimation();
+        };
+
+        // function to actually perform the animation of the two cards,
+        // starting from the _sanitizeCardAttrsial state and going until the end of the
+        // animation
+        var _doAnimation = function(){
+            animationStarted = true;
+
+            var oldCardDone = false;
+            var newCardDone = false;
+            var animationComplete = false;
+
+            // create the listener to be fired after the final animations
+            // have completed
+            var onTransitionComplete = function(e){
+                if(animationComplete){
+                    return;
+                }
+
+                if(e.target === oldCard){
+                    oldCardDone = true;
+                    oldCard.removeEventListener("transitionend",
+                                                 onTransitionComplete);
+                }
+                else if(e.target === newCard){
+                    newCardDone = true;
+                    newCard.removeEventListener("transitionend",
+                                                 onTransitionComplete);
+                }
+
+                if(oldCardDone && newCardDone){
+                    animationComplete = true;
+                    // actually call the completion callback function
+                    _onComplete();
+                }
+            };
+
+            // wait for both to finish sliding before firing completion callback
+            oldCard.addEventListener('transitionend', onTransitionComplete);
+            newCard.addEventListener('transitionend', onTransitionComplete);
+
+
+            // alternatively, because transitionend may not ever fire, have a
+            // fallback setTimeout to catch cases where transitionend doesn't
+            // fire (heuristic:wait some multiplier longer than actual duration)
+            var oldDuration = durationStrToMs(getDurationStr(oldCard));
+            var newDuration = durationStrToMs(getDurationStr(newCard));
+
+            var maxDuration = Math.max(oldDuration, newDuration);
+            var waitMultiplier = 1.15;
+
+            // special case on the "none" transition, which should be
+            // near instant
+            var timeoutDuration = (cardAnimName.toLowerCase() === "none") ?
+                                  0 : Math.ceil(maxDuration * waitMultiplier);
+
+            if(timeoutDuration === 0){
+                animationComplete = true;
+
+                oldCard.removeEventListener("transitionend",
+                                             onTransitionComplete);
+                newCard.removeEventListener("transitionend",
+                                             onTransitionComplete);
+                oldCard.removeAttribute(BEFORE_ANIM_ATTR);
+                newCard.removeAttribute(BEFORE_ANIM_ATTR);
+                _onComplete();
+            }
+            else{
+                // unleash the animation!
+                oldCard.removeAttribute(BEFORE_ANIM_ATTR);
+                newCard.removeAttribute(BEFORE_ANIM_ATTR);
+
+                window.setTimeout(function(){
+                    if(animationComplete){
+                        return;
+                    }
+
+                    animationComplete = true;
+
+                    oldCard.removeEventListener("transitionend",
+                                                 onTransitionComplete);
+                    newCard.removeEventListener("transitionend",
+                                                 onTransitionComplete);
+                    _onComplete();
+                }, timeoutDuration);
+            }
+        };
+
+        // finally, after setting up all these callback functions, actually
+        // start the animation by setting the old and new cards at their
+        // animation beginning states
+        xtag.skipTransition(oldCard, function(){
+            oldCard.setAttribute("card-anim-type", cardAnimName);
+            oldCard.setAttribute(BEFORE_ANIM_ATTR, true);
+
+            oldCardAnimReady = true;
+            _attemptBeforeCallback();
+
+            return _attemptAnimation;
+        }, this);
+
+        xtag.skipTransition(newCard, function(){
+            newCard.setAttribute("card-anim-type", cardAnimName);
+            newCard.setAttribute(BEFORE_ANIM_ATTR, true);
+
+            newCardAnimReady = true;
+            _attemptBeforeCallback();
+
+            return _attemptAnimation;
+        }, this);
+    }
+
+
+    /** _replaceCurrCard: (DOM, DOM, String, String, Boolean)
+
+    replaces the current card in the deck with the given newCard,
+    using the transition animation defined by the parameters
+
+    param:
+        deck             the x-deck DOM element we are working in
+        newCard                the x-card DOM element we are replacing
+                                the current card with
+        transitionType          (optional) The name of the animation type
+                                Valid options are any type defined in
+                                transitionTypeData
+                                Defaults to "scrollLeft" if not given a type
+
+        progressType            (optional)
+                                if "forward", card will use forwards animation
+                                if "reverse", card will use reverse animation
+                                if "auto", card will use forward animation if
+                                the target's is further ahead and reverse if
+                                it is farther behind (default option)
+        ignoreHistory           (optional) if true, the slide replacement will
+                                _not_ be registered to the stack's history
+                                default: false
+    **/
+    function _replaceCurrCard(deck, newCard, transitionType,
+                              progressType, ignoreHistory){
+        var oldCard = deck.xtag._selectedCard;
+
+        // avoid redundant call that doesnt actually change anything
+        // about the cards
+        if(oldCard === newCard){
+            var eDetail = {detail: {oldCard: oldCard, newCard: newCard}};
+            xtag.fireEvent(deck, "shufflestart", eDetail);
+            xtag.fireEvent(deck, "shuffleend", eDetail);
+            return;
+        }
+
+        // only call sanitize if we don't abort redundant call to avoid issue
+        // where doubletap on trigger causes graphical flicker
+        _sanitizeCardAttrs(deck);
+
+        if(transitionType === undefined){
+            console.log("defaulting to none transition");
+            transitionType = "none";
+        }
+
+        var isReverse;
+        switch (progressType){
+            case "forward":
+                isReverse = false;
+                break;
+            case "reverse":
+                isReverse = true;
+                break;
+            // automatically determine direction based on which way the target
+            // index is from our current index
+            default:
+                if(!oldCard){
+                    isReverse = false;
+                }
+                var allCards = _getAllCards(deck);
+                if(allCards.indexOf(newCard) < allCards.indexOf(oldCard)){
+                    isReverse = true;
+                }
+                else{
+                    isReverse = false;
+                }
+                break;
+        }
+
+        // check for requested animation overrides
+        if(newCard.hasAttribute("transition-override")){
+            transitionType = newCard.getAttribute("transition-override");
+        }
+
+        // register replacement to deck history, unless otherwise indicated
+        if(!ignoreHistory){
+            deck.xtag.history.pushState(newCard);
+        }
+
+        // actually perform the transition
+        _animateCardReplacement(deck, oldCard, newCard,
+                                transitionType, isReverse);
+    }
+
+
+    /** _replaceWithIndex: (DOM, Number, String, String)
+
+    transitions to the card at the given index in the deck, using the
+    given animation type
+
+    param:
+        deck                    the x-deck DOM element we are working in
+        targetIndex             the index of the x-card we want to
+                                display
+        transitionType          same as _replaceCurrCard's transitionType
+                                parameter
+
+        progressType            same as _replaceCurrCard's progressType
+                                parameter
+    **/
+    function _replaceWithIndex(deck, targetIndex, transitionType, progressType){
+        var newCard = _getCardAt(deck, targetIndex);
+
+        if(!newCard){
+            throw "no card at index " + targetIndex;
+        }
+
+        _replaceCurrCard(deck, newCard, transitionType, progressType);
+    }
+
+
+    /** _sanitizeCardAttrs: DOM
+
+    sanitizes the cards in the deck by ensuring that there is always a single
+    selected card except (and only except) when no cards exist
+
+    also removes any temp-attributes used for animation
+    **/
+    function _sanitizeCardAttrs(deck){
+        // prevent sanitizer from clobbering attributes before the deck is
+        // ready, as cards sometimes insert before deck
+        if(!deck.xtag._initialized) return;
+
+        var cards = _getAllCards(deck);
+
+        var currCard = deck.xtag._selectedCard;
+
+        if(!currCard || currCard.parentNode !== deck){
+            // if no card is yet selected, but cards still exist, match to
+            // either the most recent card in the history stack, or to the
+            // first card, if no history exists
+            if(cards.length > 0){
+                // we need to check for the existence of history, as x-cards
+                // may sometimes _sanitizeCardAttrsialize before x-decks (ie:
+                // before x-deck even has a history stack)
+                if(deck.xtag.history && deck.xtag.history.numStates > 0){
+                    currCard = deck.xtag.history.currState;
+                }
+                else{
+                    currCard = cards[0];
+                }
+            }
+            else{
+                currCard = null;
+            }
+        }
+
+        // ensure that the currCard and _only_ the currCard is selected
+        cards.forEach(function(card){
+            card.removeAttribute("leaving");
+            card.removeAttribute(BEFORE_ANIM_ATTR);
+            card.removeAttribute("card-anim-type");
+            card.removeAttribute("reverse");
+            if(card !== currCard){
+                card.removeAttribute("selected");
+            }
+            else{
+                card.setAttribute("selected", true);
+            }
+        });
+
+        deck.xtag._selectedCard = currCard;
+        deck.selectedIndex = _getCardIndex(deck, currCard);
+    }
+
+
+    xtag.register("x-deck", {
+        lifecycle:{
+            created: function(){
+                var self = this;
+
+                self.xtag._initialized = true;
+                var _historyValidator = function(card){
+                                            return card.parentNode === self;
+                                        };
+                self.xtag.history = new HistoryStack(_historyValidator,
+                                                     HistoryStack.DEFAULT_CAP);
+
+                self.xtag._selectedCard = (self.xtag._selectedCard) ?
+                                           self.xtag._selectedCard : null;
+                self.xtag._lastAnimTimestamp = null;
+                self.xtag.transitionType = "scrollLeft";
+
+                // grab card at selected index and set initial card,
+                // if available
+                var initCard = self.getCardAt(
+                                  self.getAttribute("selected-index")
+                               );
+                if(initCard){
+                    self.xtag._selectedCard = initCard;
+                }
+
+                _sanitizeCardAttrs(self);
+                var currCard = self.xtag._selectedCard;
+                if(currCard){
+                    self.xtag.history.pushState(currCard);
+                }
+            }
+        },
+        events:{
+            // shuffleend is fired when done transitioning
+            "show:delegate(x-card)": function(e){
+                var card = this;
+                card.show();
+            }
+        },
+        accessors:{
+            /** transitionType
+            *
+            * handles the style of the animation that should be used when
+            * transitioning between two cards
+            **/
+            "transitionType":{
+                attribute: {name: "transition-type"},
+                get: function(){
+                    return this.xtag.transitionType;
+                },
+                set: function(newType){
+                    this.xtag.transitionType = newType;
+                }
+            },
+
+            /** selectedIndex
+             * gets/sets the index of the currently selected card
+             * note that setting this instead of using shuffleTo is equivalent
+             * to performing a "none" type transition
+            **/
+            "selectedIndex":{
+                attribute: {
+                    skip: true,
+                    name: "selected-index"
+                },
+                get: function(){
+                    return _getCardIndex(this, this.xtag._selectedCard);
+                },
+                set: function(newIndex){
+                    if(this.selectedIndex !== newIndex){
+                        _replaceWithIndex(this, newIndex, "none");
+                    }
+                    this.setAttribute("selected-index", newIndex);
+                }
+            },
+
+
+            /** historyCap
+            *
+            * get/set the maximum number of cards to keep in history at any time
+            **/
+            'historyCap': {
+                attribute: {name: "history-cap"},
+                get: function(){
+                    return this.xtag.history.itemCap;
+                },
+                set: function(itemCap){
+                    this.xtag.history.itemCap = itemCap;
+                }
+            },
+
+            /** numCards
+            *
+            * get the number of cards currently in the deck
+            **/
+            "numCards":{
+                get: function(){
+                    return this.getAllCards().length;
+                }
+            },
+
+            /** currHistorySize
+            *
+            * gets the number of cards currently in history
+            **/
+            "currHistorySize": {
+                get: function(){
+                    return this.xtag.history.numStates;
+                }
+            },
+
+            /** currHistoryIndex
+            *
+            * gets the current index that we are at in our history stack
+            **/
+            "currHistoryIndex": {
+                get: function(){
+                    return this.xtag.history.currIndex;
+                }
+            },
+
+            "cards": {
+                get: function(){
+                    return this.getAllCards();
+                }
+            },
+
+            "selectedCard": {
+                get: function(){
+                    return this.getSelectedCard();
+                }
+            }
+        },
+        methods:{
+            /** shuffleTo: (Number, String)
+
+            transitions to the card at the given index
+
+            parameters:
+                index          the index to shuffle to
+                progressType    if "forward", card will use forwards animation
+                                if "reverse", card will use reverse animation
+                                if "auto", card will use forward animation if
+                                the target's is further ahead and reverse if
+                                it is farther behind (default option)
+            **/
+            shuffleTo: function(index, progressType){
+                var targetCard = _getCardAt(this, index);
+                if(!targetCard){
+                    throw "invalid shuffleTo index " + index;
+                }
+
+                var transitionType = this.xtag.transitionType;
+
+                _replaceWithIndex(this, index, transitionType, progressType);
+            },
+
+            /** shuffleNext: (String)
+
+            transitions to the card at the next index
+
+            parameters:
+                progressType    if "forward", card will use forwards animation
+                                if "reverse", card will use reverse animation
+                                if "auto", card will use forward animation if
+                                the target's is further ahead and reverse if
+                                it is farther behind (default option)
+            **/
+            shuffleNext: function(progressType){
+                progressType = (progressType) ? progressType : "auto";
+
+                var cards = _getAllCards(this);
+                var currCard = this.xtag._selectedCard;
+                var currIndex = cards.indexOf(currCard);
+
+                if(currIndex > -1){
+                    this.shuffleTo(posModulo(currIndex+1, cards.length),
+                                   progressType);
+                }
+            },
+
+            /** shufflePrev: (String)
+
+            transitions to the card at the previous index
+
+            parameters:
+                progressType    if "forward", card will use forwards animation
+                                if "reverse", card will use reverse animation
+                                if "auto", card will use forward animation if
+                                the target's is further ahead and reverse if
+                                it is farther behind (default option)
+            **/
+            shufflePrev: function(progressType){
+                progressType = (progressType) ? progressType : "auto";
+
+                var cards = _getAllCards(this);
+                var currCard = this.xtag._selectedCard;
+                var currIndex = cards.indexOf(currCard);
+                if(currIndex > -1){
+                    this.shuffleTo(posModulo(currIndex-1, cards.length),
+                                   progressType);
+                }
+            },
+
+            /** getAllCards: => DOM array
+
+            returns a list of all x-card elements in the deck
+            **/
+            getAllCards: function(){
+                return _getAllCards(this);
+            },
+
+            /** getSelectedCard: => DOM/null
+
+            returns the currently selected x-card in the deck, if any
+            **/
+            getSelectedCard: function(){
+                return this.xtag._selectedCard;
+            },
+
+            /** getCardIndex: (DOM) => Number
+            *
+            * returns the index of the given x-card in the deck
+            * returns -1 if the given card does not exist in this deck
+            **/
+            getCardIndex: function(card){
+                return _getCardIndex(this, card);
+            },
+
+            /** getCardAt: (Number) => DOM
+            *
+            *  returns the x-card DOM element at the given index
+            *  returns null if no such card exists
+            **/
+            getCardAt: function(index){
+                return _getCardAt(this, index);
+            },
+
+
+            /** historyBack
+             *
+             * transitions to the previous card in the history stack
+             *
+             * optionally takes a progressType parameter (see shuffleTo's
+             * progressType documentation)
+            **/
+            historyBack: function(progressType){
+                var history = this.xtag.history;
+                var deck = this;
+
+                if(history.canUndo){
+                    history.backwards();
+
+                    var newCard = history.currState;
+                    if(newCard){
+                        _replaceCurrCard(this, newCard, this.transitionType,
+                                         progressType, true);
+                    }
+                }
+            },
+
+
+            /** historyForward
+             *
+             * transitions to the next card in the history stack
+             *
+             * optionally takes a progressType parameter (see shuffleTo's
+             * progressType documentation)
+            **/
+            historyForward: function(progressType){
+                var history = this.xtag.history;
+                var deck = this;
+
+                if(history.canRedo){
+                    history.forwards();
+
+                    var newCard = history.currState;
+                    if(newCard){
+                        _replaceCurrCard(this, newCard, this.transitionType,
+                                         progressType, true);
+                    }
+                }
+            }
+        }
+    });
+
+    xtag.register("x-card", {
+        lifecycle:{
+            inserted: function(){
+                var self = this;
+                var deckContainer = self.parentNode;
+                if (deckContainer){
+                    if(deckContainer.tagName.toLowerCase() === 'x-deck')
+                    {
+                        _sanitizeCardAttrs(deckContainer);
+                        self.xtag.parentDeck = deckContainer;
+                        xtag.fireEvent(deckContainer, "cardadd",
+                                      {detail: {"card": self}});
+                    }
+                }
+
+            },
+            created: function(){
+                var deckContainer = this.parentNode;
+                if (deckContainer &&
+                        deckContainer.tagName.toLowerCase() === 'x-deck')
+                {
+                    this.xtag.parentDeck = deckContainer;
+                }
+            },
+            removed: function(){
+                var self = this;
+                if(!self.xtag.parentDeck){
+                    return;
+                }
+
+                var deck = self.xtag.parentDeck;
+                deck.xtag.history.sanitizeStack();
+                _sanitizeCardAttrs(deck);
+                xtag.fireEvent(deck, "cardremove",
+                               {detail: {"card": self}});
+            }
+        },
+        accessors:{
+            "transitionOverride": {
+                attribute: {name: "transition-override"}
+            }
+        },
+        methods:{
+            // forces the shuffledeck to display this card
+            "show": function(){
+                var deck = this.parentNode;
+                if(deck === this.xtag.parentDeck){
+                    deck.shuffleTo(deck.getCardIndex(this));
+                }
+            }
+        }
+    });
+
+})();
+(function(){
+    // dataUrl for a 1x1 transparent gif
+    var EMPTY_SRC = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+    var IMG_NODE_NAME = document.createElement("img").nodeName;
+    var DEFAULT_TEXT_GETTER = function(iconButton){
+                                 return iconButton.xtag.contentEl.textContent;
+                              };
+    var DEFAULT_TEXT_SETTER = function(iconButton, newText){
+                                  iconButton.xtag.contentEl.textContent = newText;
+                              };
+    var SPACE_KEYCODE = 32;
+    var ENTER_KEYCODE = 13;
+
+    // hides/unhides parts of the button depending on if they have any content,
+    // also removes image source if explicitly given a null/empty src
+    function updatePartsVisibility(elem, iconSrc){
+        // if the icon is an img tag, modify based on its img src
+        if(elem.xtag.iconEl.nodeName === IMG_NODE_NAME){
+            iconSrc = (iconSrc !== undefined) ? iconSrc : elem.xtag.iconEl.src;
+            // replace image with empty source if given an empty source
+            if(!iconSrc){
+                elem.xtag.iconEl.src = EMPTY_SRC;
+            }
+
+            // only show if given a valid source that is not empty
+            elem.xtag.iconEl.style.display =
+                (iconSrc && iconSrc !== EMPTY_SRC) ? "" : "none";
+        }
+        // if the icon isn't an img tag, modify based on its innerHTML
+        else{
+            elem.xtag.iconEl.style.display =
+                (elem.xtag.iconEl.innerHTML) ? "" : "none";
+        }
+
+        elem.xtag.contentEl.style.display =
+            (elem.xtag.contentEl.innerHTML) ? "" : "none";
+    }
+
+    // updates the html layout order of the icon and label to match any given
+    // anchors
+    function updatePartsOrder(elem){
+        var icon = elem.xtag.iconEl;
+        var label = elem.xtag.contentEl;
+        if(!(label && icon)) return;
+
+        var parent = icon.parentNode;
+        if((!parent) || label.parentNode !== parent){
+            throw "invalid parent node of iconbutton's icon / label";
+        }
+
+        switch(elem.iconAnchor){
+            // icon goes after label
+            case "right":
+            case "bottom":
+                parent.insertBefore(label, icon);
+                break;
+
+            //icon goes before label
+            //case "left":
+            //case "top":
+            default:
+                parent.insertBefore(icon, label);
+                break;
+        }
+    }
+
+    function _deactivateButtons(e){
+        xtag.query(document, "x-iconbutton[active]").forEach(function(button){
+            button.removeAttribute("active");
+        });
+    }
+
+    function _unfocusButtons(){
+        xtag.query(document, "x-iconbutton:focus").forEach(function(button){
+            button.blur();
+        });
+    }
+
+    function _unselectAllButtons(e){
+        _deactivateButtons(e);
+        _unfocusButtons();
+    }
+
+    var DOC_LISTENER_FNS = null;
+
+    xtag.register("x-iconbutton", {
+        lifecycle:{
+            // creates a <button> element with top-level <figure> wrapper for
+            // the icon's <img> element
+            // and a <span> element for the label
+            created: function(){
+                var content = this.innerHTML;
+                this.innerHTML = "<div class='x-iconbutton-content-wrap'>"+
+                                   "<img class='x-iconbutton-icon' "+
+                                   "     src='"+EMPTY_SRC+"'/>"+
+                                   "<span class='x-iconbutton-content'></span>"+
+                                 "</div>"+
+                                 "<div class='x-iconbutton-ghost'></div>";
+                this.xtag.iconEl = this.querySelector(".x-iconbutton-icon");
+                this.xtag.contentEl = this.querySelector(".x-iconbutton-content");
+                // don't forget to insert content here
+                this.xtag.contentEl.innerHTML = content;
+
+                // set up default getter and setters for modifying text content
+                // default behavior: modify text directly
+                if(!this.textGetter){
+                    this.textGetter = DEFAULT_TEXT_GETTER;
+                }
+                if(!this.textSetter){
+                    this.textSetter = DEFAULT_TEXT_SETTER;
+                }
+
+                updatePartsOrder(this);
+                updatePartsVisibility(this);
+
+                if(!this.hasAttribute("tabindex")){
+                    this.setAttribute("tabindex", 0);
+                }
+            },
+            inserted: function() {
+                if(!DOC_LISTENER_FNS){
+                    DOC_LISTENER_FNS = {
+                        "tapend": xtag.addEvent(document, "tapend",
+                                                _unselectAllButtons),
+                        "dragend": xtag.addEvent(document, "dragend",
+                                                _unselectAllButtons),
+                        "keyup": xtag.addEvent(document, "keyup",
+                                                _deactivateButtons)
+                    };
+                }
+                updatePartsOrder(this);
+                updatePartsVisibility(this);
+            },
+            removed: function(){
+                if(DOC_LISTENER_FNS && !document.query("x-calendar")){
+                    for(var eventType in DOC_LISTENER_FNS){
+                        xtag.removeEvent(document, eventType,
+                                         DOC_LISTENER_FNS[eventType]);
+                    }
+                    DOC_LISTENER_FNS = null;
+                }
+            },
+            attributeChanged: function(){
+                var iconEl = this.iconEl;
+                var contentEl = this.contentEl;
+                if(!(iconEl.parentNode &&
+                     iconEl.parentNode.parentNode === this &&
+                     contentEl.parentNode &&
+                     contentEl.parentNode.parentNode === this))
+                {
+                    console.warn("inner DOM of the iconbutton appears to be "+
+                                "out of sync; make sure that editing innerHTML"+
+                                " or textContent is done through .contentEl, "+
+                                "not directly on the iconbutton itself");
+                }
+                updatePartsOrder(this);
+                updatePartsVisibility(this);
+            }
+        },
+        events: {
+            "tapstart": function(e){
+                e.currentTarget.setAttribute("active", true);
+            },
+            // allow 'clicking' with enter/space keys when focused
+            "keypress": function(e){
+                var keyCode = e.key || e.keyCode;
+                if(keyCode === SPACE_KEYCODE || keyCode === ENTER_KEYCODE){
+                    e.currentTarget.click();
+                }
+            },
+            "keydown": function(e){
+                var keyCode = e.key || e.keyCode;
+                if(keyCode === SPACE_KEYCODE || keyCode === ENTER_KEYCODE){
+                    e.currentTarget.setAttribute("active", true);
+                }
+            }
+        },
+        accessors: {
+            "src": {
+                attribute: {},
+                get: function(){
+                    return this.xtag.iconEl.getAttribute("src");
+                },
+                set: function(newSrc){
+                    this.xtag.iconEl.setAttribute("src", newSrc);
+                    this.xtag.iconEl.src = newSrc;
+                    updatePartsVisibility(this, newSrc);
+                }
+            },
+            "active":{
+                attribute:{}
+            },
+            "iconAnchor": {
+                attribute: {name: "icon-anchor"},
+                set: function(newAnchor){
+                    updatePartsOrder(this);
+                }
+            },
+            "iconEl": {
+                get: function(){
+                    return this.xtag.iconEl;
+                }
+            },
+            "contentEl": {
+                get: function(){
+                    return this.xtag.contentEl;
+                }
+            }
+        }
+    });
 
 })();
