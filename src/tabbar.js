@@ -50,6 +50,15 @@
         return (rect.left <= x && x <= rect.right &&
                 rect.top <= y && y <= rect.bottom);
     }
+    function _selectTab(tabEl) {
+      var activeTab = xtag.query(tabEl.parentNode, "x-tabbar-tab[selected]");
+        if (activeTab.length) {
+          activeTab.forEach(function(t) {
+            t.removeAttribute('selected');
+          });
+        }
+      tabEl.setAttribute('selected', true);
+    }
 
     xtag.register("x-tabbar", {
         lifecycle: {
@@ -59,13 +68,7 @@
         },
         events: {
             "tap:delegate(x-tabbar-tab)": function(e) {
-                var activeTab = xtag.query(this.parentNode, "x-tabbar-tab[selected]");
-                if (activeTab.length) {
-                    activeTab.forEach(function(t) {
-                        t.removeAttribute('selected');
-                    });
-                }
-                this.setAttribute('selected', true);
+                _selectTab(this);
             }
         },
         accessors: {
@@ -186,6 +189,11 @@
                 }
             }
         },
-        methods: {}
+        methods: { 
+          select: function() {
+              _selectTab(this);
+              _onTabbarTabTap(this);
+          }
+        }
     });
 })();
