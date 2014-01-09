@@ -1,4 +1,4 @@
-(function(){
+(function () {
     /** getWindowViewport() => { top: number, left: number,
                                   right: number, bottom: number,
                                   width: number, height: number}
@@ -6,7 +6,7 @@
     returns the rectangle of the current window viewport, relative to the
     document
     **/
-    function getWindowViewport(){
+    function getWindowViewport () {
         var docElem = document.documentElement;
         var rect = {
             left: (docElem.scrollLeft || document.body.scrollLeft || 0),
@@ -29,7 +29,7 @@
     returned coordinates already account for any CSS transform scaling on the
     given element
     **/
-    function getRect(el){
+    function getRect (el) {
         var rect = el.getBoundingClientRect();
         var viewport = getWindowViewport();
         var docScrollLeft = viewport.left;
@@ -46,19 +46,19 @@
     /* _pointIsInRect: (Number, Number, {left: number, top: number,
                                          right: number, bottom: number})
     */
-    function _pointIsInRect(x, y, rect){
+    function _pointIsInRect (x, y, rect) {
         return (rect.left <= x && x <= rect.right &&
                 rect.top <= y && y <= rect.bottom);
     }
 
     xtag.register("x-tabbar", {
         lifecycle: {
-            created: function(){
+            created: function () {
                 this.xtag.overallEventToFire = "show";
             }
         },
         events: {
-            "tap:delegate(x-tabbar-tab)": function(e) {
+            "tap:delegate(x-tabbar-tab)": function () {
                 var activeTab = xtag.query(this.parentNode, "x-tabbar-tab[selected]");
                 if (activeTab.length) {
                     activeTab.forEach(function(t) {
@@ -71,16 +71,16 @@
         accessors: {
             // retrive a list of the tabs in this bar
             'tabs': {
-                get: function(){
+                get: function () {
                     return xtag.queryChildren(this, "x-tabbar-tab");
                 }
             },
             "targetEvent": {
                 attribute: {name: "target-event"},
-                get: function(){
+                get: function () {
                     return this.xtag.overallEventToFire;
                 },
-                set: function(newEventType){
+                set: function (newEventType) {
                     this.xtag.overallEventToFire = newEventType;
                 }
             }
@@ -88,15 +88,15 @@
         methods: {}
     });
 
-    function _onTabbarTabTap(tabEl){
-        if(tabEl.parentNode.nodeName.toLowerCase() === "x-tabbar"){
+    function _onTabbarTabTap (tabEl) {
+        if (tabEl.parentNode.nodeName.toLowerCase() === "x-tabbar") {
             var targetEvent = tabEl.targetEvent; // getter handles casing
 
             var targets = (tabEl.targetSelector) ?
                               xtag.query(document, tabEl.targetSelector) :
                               tabEl.targetElems;
 
-            targets.forEach(function(targ){
+            targets.forEach(function (targ) {
                 xtag.fireEvent(targ, targetEvent);
             });
         }
@@ -104,7 +104,7 @@
 
     xtag.register("x-tabbar-tab", {
         lifecycle: {
-            created: function(){
+            created: function () {
                 this.xtag.targetSelector = null;
                 // for when the user provides DOM programmatically
                 // instead of through selector
@@ -113,21 +113,18 @@
             }
         },
         events: {
-            "tap": function(e){
-
+            "tap": function (e) {
                 var tabEl = e.currentTarget;
                 // for touchend, ensure that we actually tapped and didn't drag
                 // off
-                if(e.changedTouches && e.changedTouches.length>0){
+                if (e.changedTouches && e.changedTouches.length > 0) {
                     var releasedTouch = e.changedTouches[0];
                     var tabRect = getRect(tabEl);
-                    if(_pointIsInRect(releasedTouch.pageX, releasedTouch.pageY,
-                                      tabRect))
-                    {
+                    if (_pointIsInRect(releasedTouch.pageX, releasedTouch.pageY,
+                                      tabRect)) {
                         _onTabbarTabTap(tabEl);
                     }
-                }
-                else{
+                } else {
                    _onTabbarTabTap(tabEl);
                 }
             }
@@ -135,33 +132,31 @@
         accessors: {
             "targetSelector": {
                 attribute: {name: "target-selector"},
-                get: function(){
+                get: function () {
                     return this.xtag.targetSelector;
                 },
-                set: function(newTargetSelector){
+                set: function (newTargetSelector) {
                     this.xtag.targetSelector = newTargetSelector;
 
-                    if(newTargetSelector){
+                    if (newTargetSelector) {
                         this.xtag.overrideTargetElems = null;
                     }
                 }
             },
             "targetElems":{
-                get: function(){
-                    if(this.targetSelector){
+                get: function () {
+                    if (this.targetSelector) {
                         return xtag.query(document, this.targetSelector);
-                    }
-                    else if(this.xtag.overrideTargetElems !== null){
+                    } else if (this.xtag.overrideTargetElems !== null) {
                         return this.xtag.overrideTargetElems;
-                    }
-                    else{
+                    } else {
                         return [];
                     }
                 },
                 // provide a way to manually override targets by passing DOM
                 // elements in with code if users don't want to bother with
                 // CSS selectors
-                set: function(newElems){
+                set: function (newElems) {
                     // remove attribute to avoid confusing desynched attributes
                     this.removeAttribute("target-selector");
 
@@ -170,18 +165,16 @@
             },
             "targetEvent":{
                 attribute: {name: "target-event"},
-                get: function(){
-                    if(this.xtag.targetEvent){
+                get: function () {
+                    if (this.xtag.targetEvent) {
                         return this.xtag.targetEvent;
-                    }
-                    else if(this.parentNode.nodeName.toLowerCase() === "x-tabbar"){
+                    } else if (this.parentNode.nodeName.toLowerCase() === "x-tabbar") {
                         return this.parentNode.targetEvent;
-                    }
-                    else{
+                    } else {
                         throw "tabbar-tab is missing event to fire";
                     }
                 },
-                set: function(newEvent){
+                set: function (newEvent) {
                     this.xtag.targetEvent = newEvent;
                 }
             }
