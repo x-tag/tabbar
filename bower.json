@@ -1,7 +1,7 @@
 {
   "name": "x-tag-tabbar",
   "description": "A box in which slides can be cycled and replaced with in a variety of different orders and transitions",
-  "version": "0.1.2",
+  "version": "0.1.6",
   "keywords": [
     "web-components",
     "button",
