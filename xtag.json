@@ -1,7 +1,7 @@
 {
 	"name": "TabBar",
 	"tagName": "x-tabbar",
-	"version": "0.1.7",
+	"version": "0.1.8",
 	"author": "Leon Zhang",
 	"description": "Tab bars are used to display an app-level navigation/tabbing bar (usually at the bottom of the UI) that shows different content depending on which tab is selected.",
 	"demo": "demo/testpage.html",
