@@ -22,7 +22,7 @@
 			"target-event": "Sets a custom event type for the tabbar to fire on selected elements, instead of the default of 'show'. Can also be applied on x-tabbar-tabs instead to further provide granular control."
 		},
 		"events": {
-			"show": "The default event that a x-tabbar-tab will fire on its selected elements if not overridden by 'target-event'"
+			"reveal": "The default event that a x-tabbar-tab will fire on its selected elements if not overridden by 'target-event'"
 		},
 		"methods": {},
 		"getters": {

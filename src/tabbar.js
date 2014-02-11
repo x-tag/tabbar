@@ -54,7 +54,7 @@
     xtag.register("x-tabbar", {
         lifecycle: {
             created: function () {
-                this.xtag.overallEventToFire = "show";
+                this.xtag.overallEventToFire = "reveal";
             }
         },
         events: {
