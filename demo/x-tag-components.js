@@ -4,8 +4,7 @@ window.Platform = {};
 var logFlags = {};
 
 
-
-// DOMTokenList polyfill fir IE9
+// DOMTokenList polyfill for IE9
 (function () {
 
 if (typeof window.Element === "undefined" || "classList" in document.documentElement) return;
@@ -91,26 +90,20 @@ defineElementGetter(Element.prototype, 'classList', function () {
 
 /*
  * Copyright 2012 The Polymer Authors. All rights reserved.
- * Use of this source code is goverened by a BSD-style
+ * Use of this source code is governed by a BSD-style
  * license that can be found in the LICENSE file.
  */
 
-// SideTable is a weak map where possible. If WeakMap is not available the
-// association is stored as an expando property.
-var SideTable;
-// TODO(arv): WeakMap does not allow for Node etc to be keys in Firefox
-if (typeof WeakMap !== 'undefined' && navigator.userAgent.indexOf('Firefox/') < 0) {
-  SideTable = WeakMap;
-} else {
+if (typeof WeakMap === 'undefined') {
   (function() {
     var defineProperty = Object.defineProperty;
     var counter = Date.now() % 1e9;
 
-    SideTable = function() {
+    var WeakMap = function() {
       this.name = '__st' + (Math.random() * 1e9 >>> 0) + (counter++ + '__');
     };
 
-    SideTable.prototype = {
+    WeakMap.prototype = {
       set: function(key, value) {
         var entry = key[this.name];
         if (entry && entry[0] === key)
@@ -126,7 +119,9 @@ if (typeof WeakMap !== 'undefined' && navigator.userAgent.indexOf('Firefox/') < 
       delete: function(key) {
         this.set(key, undefined);
       }
-    }
+    };
+
+    window.WeakMap = WeakMap;
   })();
 }
 
@@ -138,7 +133,7 @@ if (typeof WeakMap !== 'undefined' && navigator.userAgent.indexOf('Firefox/') < 
 
 (function(global) {
 
-  var registrationsTable = new SideTable();
+  var registrationsTable = new WeakMap();
 
   // We use setImmediate or postMessage for our future callback.
   var setImmediate = window.msSetImmediate;
@@ -671,22 +666,15 @@ if (typeof WeakMap !== 'undefined' && navigator.userAgent.indexOf('Firefox/') < 
 
   global.JsMutationObserver = JsMutationObserver;
 
+  // Provide unprefixed MutationObserver with native or JS implementation
+  if (!global.MutationObserver && global.WebKitMutationObserver)
+    global.MutationObserver = global.WebKitMutationObserver;
+
+  if (!global.MutationObserver)
+    global.MutationObserver = JsMutationObserver;
+
+
 })(this);
-
-/*
- * Copyright 2013 The Polymer Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style
- * license that can be found in the LICENSE file.
- */
-
-if (!window.MutationObserver) {
-  window.MutationObserver = 
-      window.WebKitMutationObserver || 
-      window.JsMutationObserver;
-  if (!MutationObserver) {
-    throw new Error("no mutation observer support");
-  }
-}
 
 /*
  * Copyright 2013 The Polymer Authors. All rights reserved.
@@ -713,9 +701,9 @@ if (!scope) {
 }
 var flags = scope.flags;
 
-// native document.register?
+// native document.registerElement?
 
-var hasNative = Boolean(document.register);
+var hasNative = Boolean(document.registerElement);
 var useNative = !flags.register && hasNative;
 
 if (useNative) {
@@ -763,7 +751,7 @@ if (useNative) {
    *      element.
    *
    * @example
-   *      FancyButton = document.register("fancy-button", {
+   *      FancyButton = document.registerElement("fancy-button", {
    *        extends: 'button',
    *        prototype: Object.create(HTMLButtonElement.prototype, {
    *          readyCallback: {
@@ -776,22 +764,24 @@ if (useNative) {
    * @return {Function} Constructor for the newly registered type.
    */
   function register(name, options) {
-    //console.warn('document.register("' + name + '", ', options, ')');
+    //console.warn('document.registerElement("' + name + '", ', options, ')');
     // construct a defintion out of options
     // TODO(sjmiles): probably should clone options instead of mutating it
     var definition = options || {};
     if (!name) {
       // TODO(sjmiles): replace with more appropriate error (EricB can probably
       // offer guidance)
-      throw new Error('document.register: first argument `name` must not be empty');
+      throw new Error('document.registerElement: first argument `name` must not be empty');
     }
     if (name.indexOf('-') < 0) {
       // TODO(sjmiles): replace with more appropriate error (EricB can probably
       // offer guidance)
-      throw new Error('document.register: first argument (\'name\') must contain a dash (\'-\'). Argument provided was \'' + String(name) + '\'.');
+      throw new Error('document.registerElement: first argument (\'name\') must contain a dash (\'-\'). Argument provided was \'' + String(name) + '\'.');
     }
-    // record name
-    definition.name = name;
+    // elements may only be registered once
+    if (getRegisteredDefinition(name)) {
+      throw new Error('DuplicateDefinitionError: a type with name \'' + String(name) + '\' is already registered');
+    }
     // must have a prototype, default to an extension of HTMLElement
     // TODO(sjmiles): probably should throw if no prototype, check spec
     if (!definition.prototype) {
@@ -799,6 +789,8 @@ if (useNative) {
       // offer guidance)
       throw new Error('Options missing required prototype property');
     }
+    // record name
+    definition.__name = name.toLowerCase();
     // ensure a lifecycle object so we don't have to null test it
     definition.lifecycle = definition.lifecycle || {};
     // build a list of ancestral custom elements (for native base detection)
@@ -814,7 +806,7 @@ if (useNative) {
     // overrides to implement attributeChanged callback
     overrideAttributeApi(definition.prototype);
     // 7.1.5: Register the DEFINITION with DOCUMENT
-    registerDefinition(name, definition);
+    registerDefinition(definition.__name, definition);
     // 7.1.7. Run custom element constructor generation algorithm with PROTOTYPE
     // 7.1.8. Return the output of the previous step.
     definition.ctor = generateConstructor(definition);
@@ -830,7 +822,7 @@ if (useNative) {
   }
 
   function ancestry(extnds) {
-    var extendee = registry[extnds];
+    var extendee = getRegisteredDefinition(extnds);
     if (extendee) {
       return ancestry(extendee.extends).concat([extendee]);
     }
@@ -847,10 +839,10 @@ if (useNative) {
       baseTag = a.is && a.tag;
     }
     // our tag is our baseTag, if it exists, and otherwise just our name
-    definition.tag = baseTag || definition.name;
+    definition.tag = baseTag || definition.__name;
     if (baseTag) {
       // if there is a base tag, use secondary 'is' specifier
-      definition.is = definition.name;
+      definition.is = definition.__name;
     }
   }
 
@@ -898,6 +890,8 @@ if (useNative) {
     if (definition.is) {
       element.setAttribute('is', definition.is);
     }
+    // remove 'unresolved' attr, which is a standin for :unresolved.
+    element.removeAttribute('unresolved');
     // make 'element' implement definition.prototype
     implement(element, definition);
     // flag as upgraded
@@ -961,28 +955,41 @@ if (useNative) {
     // overrides to implement callbacks
     // TODO(sjmiles): should support access via .attributes NamedNodeMap
     // TODO(sjmiles): preserves user defined overrides, if any
+    if (prototype.setAttribute._polyfilled) {
+      return;
+    }
     var setAttribute = prototype.setAttribute;
     prototype.setAttribute = function(name, value) {
       changeAttribute.call(this, name, value, setAttribute);
     }
     var removeAttribute = prototype.removeAttribute;
-    prototype.removeAttribute = function(name, value) {
-      changeAttribute.call(this, name, value, removeAttribute);
+    prototype.removeAttribute = function(name) {
+      changeAttribute.call(this, name, null, removeAttribute);
     }
+    prototype.setAttribute._polyfilled = true;
   }
 
+  // https://dvcs.w3.org/hg/webcomponents/raw-file/tip/spec/custom/
+  // index.html#dfn-attribute-changed-callback
   function changeAttribute(name, value, operation) {
     var oldValue = this.getAttribute(name);
     operation.apply(this, arguments);
-    if (this.attributeChangedCallback 
-        && (this.getAttribute(name) !== oldValue)) {
-      this.attributeChangedCallback(name, oldValue);
+    var newValue = this.getAttribute(name);
+    if (this.attributeChangedCallback
+        && (newValue !== oldValue)) {
+      this.attributeChangedCallback(name, oldValue, newValue);
     }
   }
 
   // element registry (maps tag names to definitions)
 
   var registry = {};
+
+  function getRegisteredDefinition(name) {
+    if (name) {
+      return registry[name.toLowerCase()];
+    }
+  }
 
   function registerDefinition(name, definition) {
     registry[name] = definition;
@@ -997,7 +1004,7 @@ if (useNative) {
   function createElement(tag, typeExtension) {
     // TODO(sjmiles): ignore 'tag' when using 'typeExtension', we could
     // error check it, or perhaps there should only ever be one argument
-    var definition = registry[typeExtension || tag];
+    var definition = getRegisteredDefinition(typeExtension || tag);
     if (definition) {
       return new definition.ctor();
     }
@@ -1007,7 +1014,7 @@ if (useNative) {
   function upgradeElement(element) {
     if (!element.__upgraded__ && (element.nodeType === Node.ELEMENT_NODE)) {
       var type = element.getAttribute('is') || element.localName;
-      var definition = registry[type];
+      var definition = getRegisteredDefinition(type);
       return definition && upgrade(element, definition);
     }
   }
@@ -1030,7 +1037,7 @@ if (useNative) {
 
   // exports
 
-  document.register = register;
+  document.registerElement = register;
   document.createElement = createElement; // override
   Node.prototype.cloneNode = cloneNode; // override
 
@@ -1049,6 +1056,9 @@ if (useNative) {
    */
   scope.upgrade = upgradeElement;
 }
+
+// bc
+document.register = document.registerElement;
 
 scope.hasNative = hasNative;
 scope.useNative = useNative;
@@ -1156,10 +1166,10 @@ function insertedNode(node) {
 
 
 // TODO(sorvell): on platforms without MutationObserver, mutations may not be 
-// reliable and therefore entered/leftView are not reliable.
+// reliable and therefore attached/detached are not reliable.
 // To make these callbacks less likely to fail, we defer all inserts and removes
 // to give a chance for elements to be inserted into dom. 
-// This ensures enteredViewCallback fires for elements that are created and 
+// This ensures attachedCallback fires for elements that are created and 
 // immediately added to dom.
 var hasPolyfillMutations = (!window.MutationObserver ||
     (window.MutationObserver === window.JsMutationObserver));
@@ -1208,7 +1218,7 @@ function _inserted(element) {
   // TODO(sjmiles): when logging, do work on all custom elements so we can
   // track behavior even when callbacks not defined
   //console.log('inserted: ', element.localName);
-  if (element.enteredViewCallback || (element.__upgraded__ && logFlags.dom)) {
+  if (element.attachedCallback || element.detachedCallback || (element.__upgraded__ && logFlags.dom)) {
     logFlags.dom && console.group('inserted:', element.localName);
     if (inDocument(element)) {
       element.__inserted = (element.__inserted || 0) + 1;
@@ -1220,9 +1230,9 @@ function _inserted(element) {
       if (element.__inserted > 1) {
         logFlags.dom && console.warn('inserted:', element.localName,
           'insert/remove count:', element.__inserted)
-      } else if (element.enteredViewCallback) {
+      } else if (element.attachedCallback) {
         logFlags.dom && console.log('inserted:', element.localName);
-        element.enteredViewCallback();
+        element.attachedCallback();
       }
     }
     logFlags.dom && console.groupEnd();
@@ -1247,11 +1257,11 @@ function removed(element) {
   }
 }
 
-function removed(element) {
+function _removed(element) {
   // TODO(sjmiles): temporary: do work on all custom elements so we can track
   // behavior even when callbacks not defined
-  if (element.leftViewCallback || (element.__upgraded__ && logFlags.dom)) {
-    logFlags.dom && console.log('removed:', element.localName);
+  if (element.attachedCallback || element.detachedCallback || (element.__upgraded__ && logFlags.dom)) {
+    logFlags.dom && console.group('removed:', element.localName);
     if (!inDocument(element)) {
       element.__inserted = (element.__inserted || 0) - 1;
       // if we are in a 'inserted' state, bluntly adjust to an 'removed' state
@@ -1262,10 +1272,11 @@ function removed(element) {
       if (element.__inserted < 0) {
         logFlags.dom && console.warn('removed:', element.localName,
             'insert/remove count:', element.__inserted)
-      } else if (element.leftViewCallback) {
-        element.leftViewCallback();
+      } else if (element.detachedCallback) {
+        element.detachedCallback();
       }
     }
+    logFlags.dom && console.groupEnd();
   }
 }
 
@@ -1300,16 +1311,6 @@ function watchRoot(root) {
   }
 }
 
-function filter(inNode) {
-  switch (inNode.localName) {
-    case 'style':
-    case 'script':
-    case 'template':
-    case undefined:
-      return true;
-  }
-}
-
 function handler(mutations) {
   //
   if (logFlags.dom) {
@@ -1332,7 +1333,7 @@ function handler(mutations) {
     if (mx.type === 'childList') {
       forEach(mx.addedNodes, function(n) {
         //logFlags.dom && console.log(n.localName);
-        if (filter(n)) {
+        if (!n.localName) {
           return;
         }
         // nodes added may need lifecycle management
@@ -1341,7 +1342,7 @@ function handler(mutations) {
       // removed nodes may need lifecycle management
       forEach(mx.removedNodes, function(n) {
         //logFlags.dom && console.log(n.localName);
-        if (filter(n)) {
+        if (!n.localName) {
           return;
         }
         removedNode(n);
@@ -1388,599 +1389,6 @@ scope.upgradeDocument = upgradeDocument;
 scope.takeRecords = takeRecords;
 
 })(window.CustomElements);
-
-/*
- * Copyright 2013 The Polymer Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style
- * license that can be found in the LICENSE file.
- */
-
-(function(scope) {
-
-if (!scope) {
-  scope = window.HTMLImports = {flags:{}};
-}
-
-// imports
-
-var xhr = scope.xhr;
-
-// importer
-
-var IMPORT_LINK_TYPE = 'import';
-var STYLE_LINK_TYPE = 'stylesheet';
-
-// highlander object represents a primary document (the argument to 'load')
-// at the root of a tree of documents
-
-// for any document, importer:
-// - loads any linked documents (with deduping), modifies paths and feeds them back into importer
-// - loads text of external script tags
-// - loads text of external style tags inside of <element>, modifies paths
-
-// when importer 'modifies paths' in a document, this includes
-// - href/src/action in node attributes
-// - paths in inline stylesheets
-// - all content inside templates
-
-// linked style sheets in an import have their own path fixed up when their containing import modifies paths
-// linked style sheets in an <element> are loaded, and the content gets path fixups
-// inline style sheets get path fixups when their containing import modifies paths
-
-var loader;
-
-var importer = {
-  documents: {},
-  cache: {},
-  preloadSelectors: [
-    'link[rel=' + IMPORT_LINK_TYPE + ']',
-    'element link[rel=' + STYLE_LINK_TYPE + ']',
-    'template',
-    'script[src]:not([type])',
-    'script[src][type="text/javascript"]'
-  ].join(','),
-  loader: function(next) {
-    // construct a loader instance
-    loader = new Loader(importer.loaded, next);
-    // alias the loader cache (for debugging)
-    loader.cache = importer.cache;
-    return loader;
-  },
-  load: function(doc, next) {
-    // construct a loader instance
-    loader = importer.loader(next);
-    // add nodes from document into loader queue
-    importer.preload(doc);
-  },
-  preload: function(doc) {
-    // all preloadable nodes in inDocument
-    var nodes = doc.querySelectorAll(importer.preloadSelectors);
-    // from the main document, only load imports
-    // TODO(sjmiles): do this by altering the selector list instead
-    nodes = this.filterMainDocumentNodes(doc, nodes);
-    // extra link nodes from templates, filter templates out of the nodes list
-    nodes = this.extractTemplateNodes(nodes);
-    // add these nodes to loader's queue
-    loader.addNodes(nodes);
-  },
-  filterMainDocumentNodes: function(doc, nodes) {
-    if (doc === document) {
-      nodes = Array.prototype.filter.call(nodes, function(n) {
-        return !isScript(n);
-      });
-    }
-    return nodes;
-  },
-  extractTemplateNodes: function(nodes) {
-    var extra = [];
-    nodes = Array.prototype.filter.call(nodes, function(n) {
-      if (n.localName === 'template') {
-        if (n.content) {
-          var l$ = n.content.querySelectorAll('link[rel=' + STYLE_LINK_TYPE +
-            ']');
-          if (l$.length) {
-            extra = extra.concat(Array.prototype.slice.call(l$, 0));
-          }
-        }
-        return false;
-      }
-      return true;
-    });
-    if (extra.length) {
-      nodes = nodes.concat(extra);
-    }
-    return nodes;
-  },
-  loaded: function(url, elt, resource) {
-    if (isDocumentLink(elt)) {
-      var document = importer.documents[url];
-      // if we've never seen a document at this url
-      if (!document) {
-        // generate an HTMLDocument from data
-        document = makeDocument(resource, url);
-        // resolve resource paths relative to host document
-        path.resolvePathsInHTML(document);
-        // cache document
-        importer.documents[url] = document;
-        // add nodes from this document to the loader queue
-        importer.preload(document);
-      }
-      // store import record
-      elt.import = {
-        href: url,
-        ownerNode: elt,
-        content: document
-      };
-      // store document resource
-      elt.content = resource = document;
-    }
-    // store generic resource
-    // TODO(sorvell): fails for nodes inside <template>.content
-    // see https://code.google.com/p/chromium/issues/detail?id=249381.
-    elt.__resource = resource;
-    // css path fixups
-    if (isStylesheetLink(elt)) {
-      path.resolvePathsInStylesheet(elt);
-    }
-  }
-};
-
-function isDocumentLink(elt) {
-  return isLinkRel(elt, IMPORT_LINK_TYPE);
-}
-
-function isStylesheetLink(elt) {
-  return isLinkRel(elt, STYLE_LINK_TYPE);
-}
-
-function isLinkRel(elt, rel) {
-  return elt.localName === 'link' && elt.getAttribute('rel') === rel;
-}
-
-function isScript(elt) {
-  return elt.localName === 'script';
-}
-
-function makeDocument(resource, url) {
-  // create a new HTML document
-  var doc = resource;
-  if (!(doc instanceof Document)) {
-    doc = document.implementation.createHTMLDocument(IMPORT_LINK_TYPE);
-    // install html
-    doc.body.innerHTML = resource;
-  }
-  // cache the new document's source url
-  doc._URL = url;
-  // establish a relative path via <base>
-  var base = doc.createElement('base');
-  base.setAttribute('href', document.baseURI || document.URL);
-  doc.head.appendChild(base);
-  // TODO(sorvell): ideally this code is not aware of Template polyfill,
-  // but for now the polyfill needs help to bootstrap these templates
-  if (window.HTMLTemplateElement && HTMLTemplateElement.bootstrap) {
-    HTMLTemplateElement.bootstrap(doc);
-  }
-  return doc;
-}
-
-var Loader = function(onLoad, onComplete) {
-  this.onload = onLoad;
-  this.oncomplete = onComplete;
-  this.inflight = 0;
-  this.pending = {};
-  this.cache = {};
-};
-
-Loader.prototype = {
-  addNodes: function(nodes) {
-    // number of transactions to complete
-    this.inflight += nodes.length;
-    // commence transactions
-    forEach(nodes, this.require, this);
-    // anything to do?
-    this.checkDone();
-  },
-  require: function(elt) {
-    var url = path.nodeUrl(elt);
-    // TODO(sjmiles): ad-hoc
-    elt.__nodeUrl = url;
-    // deduplication
-    if (!this.dedupe(url, elt)) {
-      // fetch this resource
-      this.fetch(url, elt);
-    }
-  },
-  dedupe: function(url, elt) {
-    if (this.pending[url]) {
-      // add to list of nodes waiting for inUrl
-      this.pending[url].push(elt);
-      // don't need fetch
-      return true;
-    }
-    if (this.cache[url]) {
-      // complete load using cache data
-      this.onload(url, elt, loader.cache[url]);
-      // finished this transaction
-      this.tail();
-      // don't need fetch
-      return true;
-    }
-    // first node waiting for inUrl
-    this.pending[url] = [elt];
-    // need fetch (not a dupe)
-    return false;
-  },
-  fetch: function(url, elt) {
-    var receiveXhr = function(err, resource) {
-      this.receive(url, elt, err, resource);
-    }.bind(this);
-    xhr.load(url, receiveXhr);
-    // TODO(sorvell): blocked on
-    // https://code.google.com/p/chromium/issues/detail?id=257221
-    // xhr'ing for a document makes scripts in imports runnable; otherwise
-    // they are not; however, it requires that we have doctype=html in
-    // the import which is unacceptable. This is only needed on Chrome
-    // to avoid the bug above.
-    /*
-    if (isDocumentLink(elt)) {
-      xhr.loadDocument(url, receiveXhr);
-    } else {
-      xhr.load(url, receiveXhr);
-    }
-    */
-  },
-  receive: function(url, elt, err, resource) {
-    if (!err) {
-      loader.cache[url] = resource;
-    }
-    loader.pending[url].forEach(function(e) {
-      if (!err) {
-        this.onload(url, e, resource);
-      }
-      this.tail();
-    }, this);
-    loader.pending[url] = null;
-  },
-  tail: function() {
-    --this.inflight;
-    this.checkDone();
-  },
-  checkDone: function() {
-    if (!this.inflight) {
-      this.oncomplete();
-    }
-  }
-};
-
-var URL_ATTRS = ['href', 'src', 'action'];
-var URL_ATTRS_SELECTOR = '[' + URL_ATTRS.join('],[') + ']';
-var URL_TEMPLATE_SEARCH = '{{.*}}';
-
-var path = {
-  nodeUrl: function(node) {
-    return path.resolveUrl(path.documentURL, path.hrefOrSrc(node));
-  },
-  hrefOrSrc: function(node) {
-    return node.getAttribute("href") || node.getAttribute("src");
-  },
-  documentUrlFromNode: function(node) {
-    return path.getDocumentUrl(node.ownerDocument || node);
-  },
-  getDocumentUrl: function(doc) {
-    var url = doc &&
-        // TODO(sjmiles): ShadowDOMPolyfill intrusion
-        (doc._URL || (doc.impl && doc.impl._URL)
-            || doc.baseURI || doc.URL)
-                || '';
-    // take only the left side if there is a #
-    return url.split('#')[0];
-  },
-  resolveUrl: function(baseUrl, url) {
-    if (this.isAbsUrl(url)) {
-      return url;
-    }
-    return this.compressUrl(this.urlToPath(baseUrl) + url);
-  },
-  resolveRelativeUrl: function(baseUrl, url) {
-    if (this.isAbsUrl(url)) {
-      return url;
-    }
-    return this.makeDocumentRelPath(this.resolveUrl(baseUrl, url));
-  },
-  isAbsUrl: function(url) {
-    return /(^data:)|(^http[s]?:)|(^\/)/.test(url);
-  },
-  urlToPath: function(baseUrl) {
-    var parts = baseUrl.split("/");
-    parts.pop();
-    parts.push('');
-    return parts.join("/");
-  },
-  compressUrl: function(url) {
-    var search = '';
-    var searchPos = url.indexOf('?');
-    // query string is not part of the path
-    if (searchPos > -1) {
-      search = url.substring(searchPos);
-      url = url.substring(searchPos, 0);
-    }
-    var parts = url.split('/');
-    for (var i=0, p; i<parts.length; i++) {
-      p = parts[i];
-      if (p === '..') {
-        parts.splice(i-1, 2);
-        i -= 2;
-      }
-    }
-    return parts.join('/') + search;
-  },
-  makeDocumentRelPath: function(url) {
-    // test url against document to see if we can construct a relative path
-    path.urlElt.href = url;
-    // IE does not set host if same as document
-    if (!path.urlElt.host || 
-        (path.urlElt.host === window.location.host &&
-        path.urlElt.protocol === window.location.protocol)) {
-      return this.makeRelPath(path.documentURL, path.urlElt.href);
-    } else {
-      return url;
-    }
-  },
-  // make a relative path from source to target
-  makeRelPath: function(source, target) {
-    var s = source.split('/');
-    var t = target.split('/');
-    while (s.length && s[0] === t[0]){
-      s.shift();
-      t.shift();
-    }
-    for(var i = 0, l = s.length-1; i < l; i++) {
-      t.unshift('..');
-    }
-    var r = t.join('/');
-    return r;
-  },
-  resolvePathsInHTML: function(root, url) {
-    url = url || path.documentUrlFromNode(root)
-    path.resolveAttributes(root, url);
-    path.resolveStyleElts(root, url);
-    // handle template.content
-    var templates = root.querySelectorAll('template');
-    if (templates) {
-      forEach(templates, function(t) {
-        if (t.content) {
-          path.resolvePathsInHTML(t.content, url);
-        }
-      });
-    }
-  },
-  resolvePathsInStylesheet: function(sheet) {
-    var docUrl = path.nodeUrl(sheet);
-    sheet.__resource = path.resolveCssText(sheet.__resource, docUrl);
-  },
-  resolveStyleElts: function(root, url) {
-    var styles = root.querySelectorAll('style');
-    if (styles) {
-      forEach(styles, function(style) {
-        style.textContent = path.resolveCssText(style.textContent, url);
-      });
-    }
-  },
-  resolveCssText: function(cssText, baseUrl) {
-    return cssText.replace(/url\([^)]*\)/g, function(match) {
-      // find the url path, ignore quotes in url string
-      var urlPath = match.replace(/["']/g, "").slice(4, -1);
-      urlPath = path.resolveRelativeUrl(baseUrl, urlPath);
-      return "url(" + urlPath + ")";
-    });
-  },
-  resolveAttributes: function(root, url) {
-    // search for attributes that host urls
-    var nodes = root && root.querySelectorAll(URL_ATTRS_SELECTOR);
-    if (nodes) {
-      forEach(nodes, function(n) {
-        this.resolveNodeAttributes(n, url);
-      }, this);
-    }
-  },
-  resolveNodeAttributes: function(node, url) {
-    URL_ATTRS.forEach(function(v) {
-      var attr = node.attributes[v];
-      if (attr && attr.value &&
-         (attr.value.search(URL_TEMPLATE_SEARCH) < 0)) {
-        var urlPath = path.resolveRelativeUrl(url, attr.value);
-        attr.value = urlPath;
-      }
-    });
-  }
-};
-
-path.documentURL = path.getDocumentUrl(document);
-path.urlElt = document.createElement('a');
-
-xhr = xhr || {
-  async: true,
-  ok: function(request) {
-    return (request.status >= 200 && request.status < 300)
-        || (request.status === 304)
-        || (request.status === 0);
-  },
-  load: function(url, next, nextContext) {
-    var request = new XMLHttpRequest();
-    if (scope.flags.debug || scope.flags.bust) {
-      url += '?' + Math.random();
-    }
-    request.open('GET', url, xhr.async);
-    request.addEventListener('readystatechange', function(e) {
-      if (request.readyState === 4) {
-        next.call(nextContext, !xhr.ok(request) && request,
-          request.response, url);
-      }
-    });
-    request.send();
-    return request;
-  },
-  loadDocument: function(url, next, nextContext) {
-    this.load(url, next, nextContext).responseType = 'document';
-  }
-};
-
-var forEach = Array.prototype.forEach.call.bind(Array.prototype.forEach);
-
-// exports
-
-scope.path = path;
-scope.xhr = xhr;
-scope.importer = importer;
-scope.getDocumentUrl = path.getDocumentUrl;
-scope.IMPORT_LINK_TYPE = IMPORT_LINK_TYPE;
-
-})(window.HTMLImports);
-
-/*
- * Copyright 2013 The Polymer Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style
- * license that can be found in the LICENSE file.
- */
-
-(function(scope) {
-
-var IMPORT_LINK_TYPE = 'import';
-
-// highlander object for parsing a document tree
-
-var importParser = {
-  selectors: [
-    'link[rel=' + IMPORT_LINK_TYPE + ']',
-    'link[rel=stylesheet]',
-    'style',
-    'script:not([type])',
-    'script[type="text/javascript"]'
-  ],
-  map: {
-    link: 'parseLink',
-    script: 'parseScript',
-    style: 'parseGeneric'
-  },
-  parse: function(inDocument) {
-    if (!inDocument.__importParsed) {
-      // only parse once
-      inDocument.__importParsed = true;
-      // all parsable elements in inDocument (depth-first pre-order traversal)
-      var elts = inDocument.querySelectorAll(importParser.selectors);
-      // for each parsable node type, call the mapped parsing method
-      forEach(elts, function(e) {
-        importParser[importParser.map[e.localName]](e);
-      });
-    }
-  },
-  parseLink: function(linkElt) {
-    if (isDocumentLink(linkElt)) {
-      if (linkElt.content) {
-        importParser.parse(linkElt.content);
-      }
-    } else {
-      this.parseGeneric(linkElt);
-    }
-  },
-  parseGeneric: function(elt) {
-    if (needsMainDocumentContext(elt)) {
-      document.head.appendChild(elt);
-    }
-  },
-  parseScript: function(scriptElt) {
-    if (needsMainDocumentContext(scriptElt)) {
-      // acquire code to execute
-      var code = (scriptElt.__resource || scriptElt.textContent).trim();
-      if (code) {
-        // calculate source map hint
-        var moniker = scriptElt.__nodeUrl;
-        if (!moniker) {
-          var moniker = scope.path.documentUrlFromNode(scriptElt);
-          // there could be more than one script this url
-          var tag = '[' + Math.floor((Math.random()+1)*1000) + ']';
-          // TODO(sjmiles): Polymer hack, should be pluggable if we need to allow 
-          // this sort of thing
-          var matches = code.match(/Polymer\(['"]([^'"]*)/);
-          tag = matches && matches[1] || tag;
-          // tag the moniker
-          moniker += '/' + tag + '.js';
-        }
-        // source map hint
-        code += "\n//# sourceURL=" + moniker + "\n";
-        // evaluate the code
-        eval.call(window, code);
-      }
-    }
-  }
-};
-
-var forEach = Array.prototype.forEach.call.bind(Array.prototype.forEach);
-
-function isDocumentLink(elt) {
-  return elt.localName === 'link'
-      && elt.getAttribute('rel') === IMPORT_LINK_TYPE;
-}
-
-function needsMainDocumentContext(node) {
-  // nodes can be moved to the main document:
-  // if they are in a tree but not in the main document and not children of <element>
-  return node.parentNode && !inMainDocument(node) 
-      && !isElementElementChild(node);
-}
-
-function inMainDocument(elt) {
-  return elt.ownerDocument === document ||
-    // TODO(sjmiles): ShadowDOMPolyfill intrusion
-    elt.ownerDocument.impl === document;
-}
-
-function isElementElementChild(elt) {
-  return elt.parentNode && elt.parentNode.localName === 'element';
-}
-
-// exports
-
-scope.parser = importParser;
-
-})(HTMLImports);
-/*
- * Copyright 2013 The Polymer Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style
- * license that can be found in the LICENSE file.
- */
-(function(){
-
-// bootstrap
-
-// IE shim for CustomEvent
-if (typeof window.CustomEvent !== 'function') {
-  window.CustomEvent = function(inType) {
-     var e = document.createEvent('HTMLEvents');
-     e.initEvent(inType, true, true);
-     return e;
-  };
-}
-
-function bootstrap() {
-  // preload document resource trees
-  HTMLImports.importer.load(document, function() {
-    HTMLImports.parser.parse(document);
-    HTMLImports.readyTime = new Date().getTime();
-    // send HTMLImportsLoaded when finished
-    document.dispatchEvent(
-      new CustomEvent('HTMLImportsLoaded', {bubbles: true})
-    );
-  });
-};
-
-if (document.readyState === 'complete') {
-  bootstrap();
-} else {
-  window.addEventListener('DOMContentLoaded', bootstrap);
-}
-
-})();
 
 /*
  * Copyright 2013 The Polymer Authors. All rights reserved.
@@ -2050,20 +1458,20 @@ CustomElements.parser = parser;
  * Use of this source code is governed by a BSD-style
  * license that can be found in the LICENSE file.
  */
-(function(){
+(function(scope){
 
 // bootstrap parsing
 function bootstrap() {
   // parse document
   CustomElements.parser.parse(document);
   // one more pass before register is 'live'
-  CustomElements.upgradeDocument(document);  
+  CustomElements.upgradeDocument(document);
   // choose async
   var async = window.Platform && Platform.endOfMicrotask ? 
     Platform.endOfMicrotask :
     setTimeout;
   async(function() {
-    // set internal 'ready' flag, now document.register will trigger 
+    // set internal 'ready' flag, now document.registerElement will trigger 
     // synchronous upgrades
     CustomElements.ready = true;
     // capture blunt profiling data
@@ -2072,7 +1480,7 @@ function bootstrap() {
       CustomElements.elapsed = CustomElements.readyTime - HTMLImports.readyTime;
     }
     // notify the system that we are bootstrapped
-    document.body.dispatchEvent(
+    document.dispatchEvent(
       new CustomEvent('WebComponentsReady', {bubbles: true})
     );
   });
@@ -2081,20 +1489,31 @@ function bootstrap() {
 // CustomEvent shim for IE
 if (typeof window.CustomEvent !== 'function') {
   window.CustomEvent = function(inType) {
-     var e = document.createEvent('HTMLEvents');
-     e.initEvent(inType, true, true);
-     return e;
+    var e = document.createEvent('HTMLEvents');
+    e.initEvent(inType, true, true);
+    return e;
   };
 }
 
-if (document.readyState === 'complete') {
+// When loading at readyState complete time (or via flag), boot custom elements
+// immediately.
+// If relevant, HTMLImports must already be loaded.
+if (document.readyState === 'complete' || scope.flags.eager) {
   bootstrap();
+// When loading at readyState interactive time, bootstrap only if HTMLImports
+// are not pending. Also avoid IE as the semantics of this state are unreliable.
+} else if (document.readyState === 'interactive' && !window.attachEvent &&
+    (!window.HTMLImports || window.HTMLImports.ready)) {
+  bootstrap();
+// When loading at other readyStates, wait for the appropriate DOM event to 
+// bootstrap.
 } else {
-  var loadEvent = window.HTMLImports ? 'HTMLImportsLoaded' : 'DOMContentLoaded';
+  var loadEvent = window.HTMLImports && !HTMLImports.ready ?
+      'HTMLImportsLoaded' : 'DOMContentLoaded';
   window.addEventListener(loadEvent, bootstrap);
 }
 
-})();
+})(window.CustomElements);
 
 (function () {
 
@@ -2164,6 +1583,7 @@ if (document.readyState === 'complete') {
   }
 
 // DOM
+
   var str = '';
   function query(element, selector){
     return (selector || str).length ? toArray(element.querySelectorAll(selector)) : [];
@@ -2195,25 +1615,48 @@ if (document.readyState === 'complete') {
     return source;
   }
 
-  function mergeMixin(type, mixin, option) {
-    var original = {};
-    for (var o in option) original[o.split(':')[0]] = true;
-    for (var x in mixin) if (!original[x.split(':')[0]]) option[x] = mixin[x];
+  function wrapMixin(tag, key, pseudo, value, original){
+    var fn = original[key];
+    if (!(key in original)) original[key] = value;
+    else if (typeof original[key] == 'function') {
+      if (!fn.__mixins__) fn.__mixins__ = [];
+      fn.__mixins__.push(xtag.applyPseudos(pseudo, value, tag.pseudos));
+    }
+  }
+
+  var uniqueMixinCount = 0;
+  function mergeMixin(tag, mixin, original, mix) {
+    if (mix) {
+      var uniques = {};
+      for (var z in original) uniques[z.split(':')[0]] = z;
+      for (z in mixin) {
+        wrapMixin(tag, uniques[z.split(':')[0]] || z, z, mixin[z], original);
+      }
+    }
+    else {
+      for (var zz in mixin){
+        original[zz + ':__mixin__(' + (uniqueMixinCount++) + ')'] = xtag.applyPseudos(zz, mixin[zz], tag.pseudos);
+      }
+    }
   }
 
   function applyMixins(tag) {
     tag.mixins.forEach(function (name) {
       var mixin = xtag.mixins[name];
       for (var type in mixin) {
-        switch (type) {
-          case 'lifecycle': case 'methods':
-            mergeMixin(type, mixin[type], tag[type]);
-            break;
-          case 'accessors': case 'prototype':
-            for (var z in mixin[type]) mergeMixin(z, mixin[type], tag.accessors);
-            break;
-          case 'events':
-            break;
+        var item = mixin[type],
+            original = tag[type];
+        if (!original) tag[type] = item;
+        else {
+          switch (type){
+            case 'accessors': case 'prototype':
+              for (var z in item) {
+                if (!original[z]) original[z] = item[z];
+                else mergeMixin(tag, item[z], original[z], true);
+              }
+              break;
+            default: mergeMixin(tag, item, original, type != 'events');
+          }
         }
       }
     });
@@ -2223,10 +1666,17 @@ if (document.readyState === 'complete') {
 // Events
 
   function delegateAction(pseudo, event) {
-    var target = query(this, pseudo.value).filter(function(node){
-      return node == event.target || node.contains ? node.contains(event.target) : null;
-    })[0];
-    return target ? pseudo.listener = pseudo.listener.bind(target) : null;
+    var match, target = event.target;
+    if (!target.tagName) return null;
+    if (xtag.matchSelector(target, pseudo.value)) match = target;
+    else if (xtag.matchSelector(target, pseudo.value + ' *')) {
+      var parent = target.parentNode;
+      while (!match) {
+        if (xtag.matchSelector(parent, pseudo.value)) match = parent;
+        parent = parent.parentNode;
+      }
+    }
+    return match ? pseudo.listener = pseudo.listener.bind(match) : null;
   }
 
   function touchFilter(event) {
@@ -2303,7 +1753,7 @@ if (document.readyState === 'complete') {
     var key = z.split(':'), type = key[0];
     if (type == 'get') {
       key[0] = prop;
-      tag.prototype[prop].get = xtag.applyPseudos(key.join(':'), accessor[z], tag.pseudos);
+      tag.prototype[prop].get = xtag.applyPseudos(key.join(':'), accessor[z], tag.pseudos, accessor[z]);
     }
     else if (type == 'set') {
       key[0] = prop;
@@ -2317,7 +1767,7 @@ if (document.readyState === 'complete') {
       } : accessor[z] ? function(value){
         accessor[z].call(this, value);
         updateView(this, name, value);
-      } : null, tag.pseudos);
+      } : null, tag.pseudos, accessor[z]);
 
       if (attr) attr.setter = setter;
     }
@@ -2349,6 +1799,15 @@ if (document.readyState === 'complete') {
         updateView(this, name, value);
       };
     }
+  }
+
+  var readyTags = {};
+  function fireReady(name){
+    readyTags[name] = (readyTags[name] || []).filter(function(obj){
+      return (obj.tags = obj.tags.filter(function(z){
+        return z != name && !xtag.tags[z];
+      })).length || obj.fn();
+    });
   }
 
 /*** X-Tag Object Definition ***/
@@ -2386,8 +1845,8 @@ if (document.readyState === 'complete') {
       var tag = xtag.tags[_name] = applyMixins(xtag.merge({}, xtag.defaultOptions, options));
 
       for (var z in tag.events) tag.events[z] = xtag.parseEvent(z, tag.events[z]);
-      for (z in tag.lifecycle) tag.lifecycle[z.split(':')[0]] = xtag.applyPseudos(z, tag.lifecycle[z], tag.pseudos);
-      for (z in tag.methods) tag.prototype[z.split(':')[0]] = { value: xtag.applyPseudos(z, tag.methods[z], tag.pseudos), enumerable: true };
+      for (z in tag.lifecycle) tag.lifecycle[z.split(':')[0]] = xtag.applyPseudos(z, tag.lifecycle[z], tag.pseudos, tag.lifecycle[z]);
+      for (z in tag.methods) tag.prototype[z.split(':')[0]] = { value: xtag.applyPseudos(z, tag.methods[z], tag.pseudos, tag.methods[z]), enumerable: true };
       for (z in tag.accessors) parseAccessor(tag, z);
 
       var ready = tag.lifecycle.created || tag.lifecycle.ready;
@@ -2399,7 +1858,7 @@ if (document.readyState === 'complete') {
           tag.mixins.forEach(function(mixin){
             if (xtag.mixins[mixin].events) xtag.addEvents(element, xtag.mixins[mixin].events);
           });
-          var output = ready ? ready.apply(this, toArray(arguments)) : null;
+          var output = ready ? ready.apply(this, arguments) : null;
           for (var name in tag.attributes) {
             var attr = tag.attributes[name],
                 hasAttr = this.hasAttribute(name);
@@ -2414,8 +1873,8 @@ if (document.readyState === 'complete') {
         }
       };
 
-      if (tag.lifecycle.inserted) tag.prototype.enteredViewCallback = { value: tag.lifecycle.inserted, enumerable: true };
-      if (tag.lifecycle.removed) tag.prototype.leftDocumentCallback = { value: tag.lifecycle.removed, enumerable: true };
+      if (tag.lifecycle.inserted) tag.prototype.attachedCallback = { value: tag.lifecycle.inserted, enumerable: true };
+      if (tag.lifecycle.removed) tag.prototype.detachedCallback = { value: tag.lifecycle.removed, enumerable: true };
       if (tag.lifecycle.attributeChanged) tag.prototype.attributeChangedCallback = { value: tag.lifecycle.attributeChanged, enumerable: true };
 
       var setAttribute = tag.prototype.setAttribute || HTMLElement.prototype.setAttribute;
@@ -2456,11 +1915,10 @@ if (document.readyState === 'complete') {
       };
 
       var elementProto = basePrototype ?
-        basePrototype :
-          options['extends'] ?
-            Object.create(doc.createElement(options['extends'])
-              .constructor).prototype :
-          win.HTMLElement.prototype;
+            basePrototype :
+            options['extends'] ?
+            Object.create(doc.createElement(options['extends']).constructor).prototype :
+            win.HTMLElement.prototype;
 
       var definition = {
         'prototype': Object.create(elementProto, tag.prototype)
@@ -2468,18 +1926,24 @@ if (document.readyState === 'complete') {
       if (options['extends']) {
         definition['extends'] = options['extends'];
       }
-      return doc.register(_name, definition);
+      var reg = doc.registerElement(_name, definition);
+      fireReady(_name);
+      return reg;
+    },
+
+    ready: function(names, fn){
+      var obj = { tags: toArray(names), fn: fn };
+      if (obj.tags.reduce(function(last, name){
+        if (xtag.tags[name]) return last;
+        (readyTags[name] = readyTags[name] || []).push(obj);
+      }, true)) fn();
     },
 
     /* Exposed Variables */
 
     mixins: {},
     prefix: prefix,
-    touches: {
-      active: [],
-      changed: []
-    },
-    captureEvents: ['focus', 'blur', 'scroll', 'underflow', 'overflow', 'overflowchanged'],
+    captureEvents: ['focus', 'blur', 'scroll', 'underflow', 'overflow', 'overflowchanged', 'DOMMouseScroll'],
     customEvents: {
       overflow: createFlowEvent('over'),
       underflow: createFlowEvent('under'),
@@ -2503,6 +1967,13 @@ if (document.readyState === 'complete') {
       leave: {
         attach: ['mouseout', 'touchleave'],
         condition: touchFilter
+      },
+      scrollwheel: {
+        attach: ['DOMMouseScroll', 'mousewheel'],
+        condition: function(event){
+          event.delta = event.wheelDelta ? event.wheelDelta / 40 : Math.round(event.detail / 3.5 * -1);
+          return true;
+        }
       },
       tapstart: {
         observe: {
@@ -2528,7 +1999,6 @@ if (document.readyState === 'complete') {
               custom.lastDrag = event;
               return (last.pageX != event.pageX && last.pageY != event.pageY) || null;
             case 'tapstart':
-              custom.touches = custom.touches || 1;
               if (!custom.move) {
                 custom.current = this;
                 custom.move = xtag.addEvents(this, {
@@ -2539,10 +2009,9 @@ if (document.readyState === 'complete') {
               }
               break;
             case 'tapend': case 'dragend': case 'touchcancel':
-              custom.touches--;
-              if (!custom.touches) {
-                xtag.removeEvents(custom.current , custom.move || {});
-                xtag.removeEvent(doc, custom.tapend || {});
+              if (!event.touches.length) {
+                if (custom.move) xtag.removeEvents(custom.current , custom.move || {});
+                if (custom.tapend) xtag.removeEvent(doc, custom.tapend || {});
                 delete custom.lastDrag;
                 delete custom.current;
                 delete custom.tapend;
@@ -2553,6 +2022,31 @@ if (document.readyState === 'complete') {
       }
     },
     pseudos: {
+      __mixin__: {},
+      mixins: {
+        onCompiled: function(fn, pseudo){
+          var mixins = pseudo.source.__mixins__;
+          if (mixins) switch (pseudo.value) {
+            case 'before': return function(){
+              var self = this,
+                  args = arguments;
+              mixins.forEach(function(m){
+                m.apply(self, args);
+              });
+              return fn.apply(self, args);
+            };
+            case 'after': case null: return function(){
+              var self = this,
+                  args = arguments;
+                  returns = fn.apply(self, args);
+              mixins.forEach(function(m){
+                m.apply(self, args);
+              });
+              return returns;
+            };
+          }
+        }
+      },
       keypass: keypseudo,
       keyfail: keypseudo,
       delegate: { action: delegateAction },
@@ -2582,9 +2076,10 @@ if (document.readyState === 'complete') {
 
     wrap: function (original, fn) {
       return function(){
-        var args = toArray(arguments),
-          returned = original.apply(this, args);
-        return returned === false ? false : fn.apply(this, typeof returned != 'undefined' ? toArray(returned) : args);
+        var args = arguments,
+            output = original.apply(this, args);
+        fn.apply(this, args);
+        return output;
       };
     },
 
@@ -2608,9 +2103,8 @@ if (document.readyState === 'complete') {
     skipTransition: function(element, fn, bind){
       var prop = prefix.js + 'TransitionProperty';
       element.style[prop] = element.style.transitionProperty = 'none';
-      xtag.requestFrame(function(){
-        var callback;
-        if (fn) callback = fn.call(bind);
+      var callback = fn ? fn.call(bind) : null;
+      return xtag.requestFrame(function(){
         xtag.requestFrame(function(){
           element.style[prop] = element.style.transitionProperty = '';
           if (callback) xtag.requestFrame(callback);
@@ -2620,11 +2114,16 @@ if (document.readyState === 'complete') {
 
     requestFrame: (function(){
       var raf = win.requestAnimationFrame ||
-        win[prefix.lowercase + 'RequestAnimationFrame'] ||
-        function(fn){ return win.setTimeout(fn, 20); };
-      return function(fn){
-        return raf.call(win, fn);
-      };
+                win[prefix.lowercase + 'RequestAnimationFrame'] ||
+                function(fn){ return win.setTimeout(fn, 20); };
+      return function(fn){ return raf(fn); };
+    })(),
+
+    cancelFrame: (function(){
+      var cancel = win.cancelAnimationFrame ||
+                   win[prefix.lowercase + 'CancelAnimationFrame'] ||
+                   win.clearTimeout;
+      return function(id){ return cancel(id); };
     })(),
 
     matchSelector: function (element, selector) {
@@ -2699,7 +2198,7 @@ if (document.readyState === 'complete') {
 
     /* PSEUDOS */
 
-    applyPseudos: function(key, fn, element, source) {
+    applyPseudos: function(key, fn, target, source) {
       var listener = fn,
           pseudos = {};
       if (key.match(':')) {
@@ -2708,13 +2207,14 @@ if (document.readyState === 'complete') {
         while (--i) {
           split[i].replace(regexPseudoReplace, function (match, name, value) {
             if (!xtag.pseudos[name]) throw "pseudo not found: " + name + " " + split;
+            value = (value === '' || typeof value == 'undefined') ? null : value;
             var pseudo = pseudos[i] = Object.create(xtag.pseudos[name]);
-                pseudo.key = key;
-                pseudo.name = name;
-                pseudo.value = value;
-                pseudo['arguments'] = (value || '').split(',');
-                pseudo.action = pseudo.action || trueop;
-                pseudo.source = source;
+            pseudo.key = key;
+            pseudo.name = name;
+            pseudo.value = value;
+            pseudo['arguments'] = (value || '').split(',');
+            pseudo.action = pseudo.action || trueop;
+            pseudo.source = source;
             var last = listener;
             listener = function(){
               var args = toArray(arguments),
@@ -2723,15 +2223,16 @@ if (document.readyState === 'complete') {
                     name: name,
                     value: value,
                     source: source,
+                    'arguments': pseudo['arguments'],
                     listener: last
                   };
               var output = pseudo.action.apply(this, [obj].concat(args));
               if (output === null || output === false) return output;
               return obj.listener.apply(this, args);
             };
-            if (element && pseudo.onAdd) {
-              if (element.getAttribute) pseudo.onAdd.call(element, pseudo);
-              else element.push(pseudo);
+            if (target && pseudo.onAdd) {
+              if (target.nodeName) pseudo.onAdd.call(target, pseudo);
+              else target.push(pseudo);
             }
           });
         }
@@ -2742,9 +2243,9 @@ if (document.readyState === 'complete') {
       return listener;
     },
 
-    removePseudos: function(element, event){
-      event._pseudos.forEach(function(obj){
-        if (obj.onRemove) obj.onRemove.call(element, obj);
+    removePseudos: function(target, pseudos){
+      pseudos.forEach(function(obj){
+        if (obj.onRemove) obj.onRemove.call(target, obj);
       });
     },
 
@@ -2770,24 +2271,30 @@ if (document.readyState === 'complete') {
       var condition = event.condition;
       event.condition = function(e){
         var t = e.touches, tt = e.targetTouches;
-        return condition.apply(this, toArray(arguments));
+        return condition.apply(this, arguments);
       };
       var stack = xtag.applyPseudos(event.chain, fn, event._pseudos, event);
       event.stack = function(e){
+        e.currentTarget = e.currentTarget || this;
         var t = e.touches, tt = e.targetTouches;
         var detail = e.detail || {};
-        if (!detail.__stack__) return stack.apply(this, toArray(arguments));
+        if (!detail.__stack__) return stack.apply(this, arguments);
         else if (detail.__stack__ == stack) {
           e.stopPropagation();
           e.cancelBubble = true;
-          return stack.apply(this, toArray(arguments));
+          return stack.apply(this, arguments);
         }
       };
       event.listener = function(e){
         var args = toArray(arguments),
             output = event.condition.apply(this, args.concat([event]));
         if (!output) return output;
-        if (e.type != key) xtag.fireEvent(e.target, key, { baseEvent: e, detail: { __stack__: stack } });
+        if (e.type != key) {
+          xtag.fireEvent(e.target, key, {
+            baseEvent: e,
+            detail: output !== true && (output.__stack__ = stack) ? output : { __stack__: stack }
+          });
+        }
         else return event.stack.apply(this, args);
       };
       event.attach.forEach(function(name) {
@@ -2797,7 +2304,10 @@ if (document.readyState === 'complete') {
         custom.observer = function(e){
           var output = event.condition.apply(this, toArray(arguments).concat([custom]));
           if (!output) return output;
-          xtag.fireEvent(e.target, key, { baseEvent: e });
+          xtag.fireEvent(e.target, key, {
+            baseEvent: e,
+            detail: output !== true ? output : {}
+          });
         };
         for (var z in custom.observe) xtag.addEvent(custom.observe[z] || document, z, custom.observer, true);
         custom.__observing__ = true;
@@ -2806,7 +2316,7 @@ if (document.readyState === 'complete') {
     },
 
     addEvent: function (element, type, fn, capture) {
-      var event = (typeof fn == 'function') ? xtag.parseEvent(type, fn) : fn;
+      var event = typeof fn == 'function' ? xtag.parseEvent(type, fn) : fn;
       event._pseudos.forEach(function(obj){
         obj.onAdd.call(element, obj);
       });
@@ -2829,7 +2339,7 @@ if (document.readyState === 'complete') {
     removeEvent: function (element, type, event) {
       event = event || type;
       event.onRemove.call(element, event, event.listener);
-      xtag.removePseudos(element, event);
+      xtag.removePseudos(element, event._pseudos);
       event._attach.forEach(function(obj) {
         xtag.removeEvent(element, obj);
       });
@@ -2843,7 +2353,7 @@ if (document.readyState === 'complete') {
     fireEvent: function(element, type, options, warn){
       var event = doc.createEvent('CustomEvent');
       options = options || {};
-      if (warn) console.warn('fireEvent has been modified, more info here: ');
+      if (warn) console.warn('fireEvent has been modified');
       event.initCustomEvent(type,
         options.bubbles !== false,
         options.cancelable !== false,
@@ -2852,7 +2362,7 @@ if (document.readyState === 'complete') {
       if (options.baseEvent) inheritEvent(event, options.baseEvent);
       try { element.dispatchEvent(event); }
       catch (e) {
-        console.warn('This error may have been caused by a change in the fireEvent method, more info here: ', e);
+        console.warn('This error may have been caused by a change in the fireEvent method', e);
       }
     },
 
@@ -2896,17 +2406,23 @@ if (document.readyState === 'complete') {
 
 /*** Universal Touch ***/
 
-var touchCount = 0, touchTarget = null;
+var touching = false,
+    touchTarget = null;
 
 doc.addEventListener('mousedown', function(e){
-  touchCount++;
+  touching = true;
   touchTarget = e.target;
 }, true);
 
 doc.addEventListener('mouseup', function(){
-  touchCount--;
+  touching = false;
   touchTarget = null;
-}, false);
+}, true);
+
+doc.addEventListener('dragend', function(){
+  touching = false;
+  touchTarget = null;
+}, true);
 
 var UIEventProto = {
   touches: {
@@ -2914,22 +2430,22 @@ var UIEventProto = {
     get: function(){
       return this.__touches__ ||
         (this.identifier = 0) ||
-        (this.__touches__ = touchCount ? [this] : []);
+        (this.__touches__ = touching ? [this] : []);
     }
   },
   targetTouches: {
     configurable: true,
     get: function(){
       return this.__targetTouches__ || (this.__targetTouches__ =
-        (touchCount && this.currentTarget &&
+        (touching && this.currentTarget &&
         (this.currentTarget == touchTarget ||
-        (this.currentTarget.contains && this.currentTarget.contains(touchTarget)))) ? [this] : []);
+        (this.currentTarget.contains && this.currentTarget.contains(touchTarget)))) ? (this.identifier = 0) || [this] : []);
     }
   },
   changedTouches: {
     configurable: true,
     get: function(){
-      return this.touches;
+      return this.__changedTouches__ || (this.identifier = 0) || (this.__changedTouches__ = [this]);
     }
   }
 };
@@ -2939,24 +2455,6 @@ for (z in UIEventProto){
   Object.defineProperty(UIEvent.prototype, z, UIEventProto[z]);
 }
 
-var touchReset = {
-    value: null,
-    writable: true,
-    configurable: true
-  },
-  TouchEventProto = {
-    touches: touchReset,
-    targetTouches: touchReset,
-    changedTouches: touchReset
-  };
-
-if (win.TouchEvent) {
-  for (z in TouchEventProto) {
-    var desc = Object.getOwnPropertyDescriptor(win.TouchEvent.prototype, z);
-    if (desc) win.TouchEvent.prototype[z] = TouchEventProto[z];
-    else Object.defineProperty(win.TouchEvent.prototype, z, TouchEventProto[z]);
-  }
-}
 
 /*** Custom Event Definitions ***/
 
@@ -2992,12 +2490,13 @@ if (win.TouchEvent) {
   }
 
   function checkTapPosition(el, tap, e){
-    var touch = e.changedTouches[0];
+    var touch = e.changedTouches[0],
+        tol = tap.gesture.tolerance;
     if (
-      touch.pageX < el.__tap__.x + tap.gesture.tolerance &&
-      touch.pageX > el.__tap__.x - tap.gesture.tolerance &&
-      touch.pageY < el.__tap__.y + tap.gesture.tolerance &&
-      touch.pageY > el.__tap__.y - tap.gesture.tolerance
+      touch.pageX < el.__tap__.x + tol &&
+      touch.pageX > el.__tap__.x - tol &&
+      touch.pageY < el.__tap__.y + tol &&
+      touch.pageY > el.__tap__.y - tol
     ) return true;
   }
 
@@ -3045,998 +2544,265 @@ if (win.TouchEvent) {
   });
 
 })();
-
 (function(){
-    var BEFORE_ANIM_ATTR = "_before-animation";
 
-    /** HistoryStack
-    *
-    * a generic stack implementation intended for keeping track of state history
-    *
-    * constructor params:
-    *    validatorFn             (optional) a function taking a single state and
-    *                            returns a Boolean, with false indicating an
-    *                            invalid state. If not set, will always return
-    *                            true.
-    *    itemCap                 (optional) the maximum number of items to keep
-    *                            in the stack at a time. If not set, will default
-    *                            to HistoryStack.DEFAULT_CAP. If set to "none",
-    *                            will allow inf_sanitizeCardAttrse items in the stack.
-    **/
-    function HistoryStack(validatorFn, itemCap){
-        this._historyStack = [];
-        this.currIndex = -1;
-
-        // .itemCap setter takes care of sanitizing and setting ._itemCap value
-        this._itemCap = undefined;
-        this.itemCap = itemCap;
-
-        this._validatorFn = (validatorFn) ? validatorFn :
-                                            function(x){ return true; };
-    }
-
-    var HISTORYSTACK_PROTOTYPE = HistoryStack.prototype;
-    /** HistoryStack.pushState : (user-defined)
-    *
-    * adds a state to the stack as the most recent state and sets it as the
-    * current state
-    *
-    * also handles capping the maximum number of states
-    **/
-    HISTORYSTACK_PROTOTYPE.pushState = function(newState){
-        if(this.canRedo){
-             // remove all future items, if any exist
-            this._historyStack.splice(this.currIndex + 1,
-                                      this._historyStack.length -
-                                            (this.currIndex + 1));
-        }
-        this._historyStack.push(newState);
-        this.currIndex = this._historyStack.length - 1;
-
-        this.sanitizeStack();
-
-        // remove oldest items to cap number of items in history
-        if(this._itemCap !== "none" &&
-           this._historyStack.length > this._itemCap)
-        {
-            var len = this._historyStack.length;
-            this._historyStack.splice(0, len - this._itemCap);
-
-            this.currIndex = this._historyStack.length - 1;
-        }
-    };
-
-
-    /** HistoryStack.sanitizeStack
-    *
-    * removes consecutive duplicate states and also removes all invalid states
-    * that fail to pass the validatorFn
-    **/
-    HISTORYSTACK_PROTOTYPE.sanitizeStack = function(){
-        var validatorFn = this._validatorFn;
-        var lastValidState;
-        var i = 0;
-        while(i < this._historyStack.length){
-            var state = this._historyStack[i];
-            if((state !== lastValidState) && validatorFn(state))
-            {
-                lastValidState = state;
-                i++;
-            }
-            else{
-                this._historyStack.splice(i, 1);
-                if(i <= this.currIndex){
-                    this.currIndex--;
-                }
-            }
-        }
-    };
-
-
-    /** HistoryStack.forwards
-    *
-    * moves one state towards the most recent state
-    **/
-    HISTORYSTACK_PROTOTYPE.forwards = function(){
-        if(this.canRedo){
-            this.currIndex++;
-        }
-        this.sanitizeStack();
-    };
-
-
-    /** HistoryStack.forwards
-    *
-    * moves one state back towards the oldest state
-    **/
-    HISTORYSTACK_PROTOTYPE.backwards = function(){
-        if(this.canUndo){
-            this.currIndex--;
-        }
-        this.sanitizeStack();
-    };
-
-    Object.defineProperties(HISTORYSTACK_PROTOTYPE, {
-        /** DEFAULT_CAP
-        *
-        * the default maximum cap on the number of states in the stack
-        **/
-        "DEFAULT_CAP": {
-            value: 10
-        },
-        /** itemCap
-        *
-        *  get and set the maximum number of items to keep in the stack at a
-        *  time. If set to "none", will allow inf_sanitizeCardAttrse items in the stack.
-        **/
-        "itemCap": {
-            get: function(){
-                return this._itemCap;
-            },
-            set: function(newCap){
-                if(newCap === undefined){
-                    this._itemCap = this.DEFAULT_CAP;
-                }
-                else if(newCap === "none")
-                {
-                    this._itemCap = "none";
-                }
-                else{
-                    var num = parseInt(newCap, 10);
-                    if(isNaN(newCap) || newCap <= 0){
-                        throw "attempted to set invalid item cap: " + newCap;
-                    }
-
-                    this._itemCap = num;
-                }
-            }
-        },
-        /** canUndo
-        *
-        * returns true if we are not at the oldest item in the stack
-        **/
-        "canUndo": {
-            get: function(){
-                return this.currIndex > 0;
-            }
-        },
-        /** canRedo
-        *
-        * returns true if we are not at the newest item in the stack
-        **/
-        "canRedo": {
-            get: function(){
-                return this.currIndex < this._historyStack.length-1;
-            }
-        },
-        /** numStates
-        *
-        * as you'd expect, returns the number of states in the history stack
-        **/
-        "numStates":{
-            get: function(){
-                return this._historyStack.length;
-            }
-        },
-        /** currState
-        *
-        * returns the state at the currIndex in the history stack
-        **/
-        "currState": {
-            get: function(){
-                var index = this.currIndex;
-                if(0 <= index && index < this._historyStack.length){
-                    return this._historyStack[index];
-                }
-                return null;
-            }
-        }
-    });
-
-
-    /** HELPERS **/
-
-    /** getDurationStr: (DOM) => String
-    *
-    * returns the computed style value of the given element's CSS transition
-    * duration property
-    **/
-    function getDurationStr(elem){
-        var style = window.getComputedStyle(elem);
-        var browserDurationName = xtag.prefix.js+"TransitionDuration";
-
-        if(style.transitionDuration){
-            return style.transitionDuration;
-        }
-        else{
-            return style[browserDurationName];
-        }
-    }
-
-    /** durationStrToMs: (String) => Number
-    *
-    * given a string in an acceptable format for a css transition duration,
-    * parse out and return the number of milliseconds this represents
-    **/
-    function durationStrToMs(str){
-        if(typeof(str) !== typeof("")){
-            return 0;
-        }
-
-        var reg = /^(\d*\.?\d+)(m?s)$/;
-        var matchInfo = str.toLowerCase().match(reg);
-
-        if(matchInfo){
-            var strVal = matchInfo[1];
-            var unit = matchInfo[2];
-
-            var val = parseFloat(strVal);
-            if(isNaN(val)){
-                throw "value error";
-            }
-
-            if(unit === "s"){
-                return val * 1000;
-            }
-            else if (unit === "ms"){
-                return val;
-            }
-            else{
-                throw "unit error";
-            }
-        }
-        else{
-            return 0;
-        }
-    }
-
-    /** posModulo : (Number, Number) => Number
-    * hacky workaround to get Python-esque modding so that doing
-    * negative modulos return positive numbers
-    * ex: -5 % 3 should return 1 instead of -2
-    **/
-    function posModulo(x, divisor){
-        return ((x % divisor) + divisor) % divisor;
-    }
-
-    /** _getAllCards : (DOM) => DOM array
-    *
-    * simply returns a list of all x-card DOM elements in the given
-    * DOM element
-    **/
-    function _getAllCards(elem){
-        return xtag.queryChildren(elem, "x-card");
-    }
-
-    /** _getCardAt : (DOM, Number) => DOM/null
-     *
-     * return the card at the given index in the given deck DOM
-     *
-     * returns null if no such card exists
-    **/
-    function _getCardAt(deck, targetIndex){
-        var cards = _getAllCards(deck);
-
-        return (isNaN(parseInt(targetIndex, 10)) || targetIndex < 0 ||
-                targetIndex >= cards.length) ? null : cards[targetIndex];
-    }
-
-    /** _getCardIndex: (DOM, DOM) => Number
-    *
-    * returns the index of the given x-card in the deck
-    * returns -1 if the given card does not exist in this deck
-    **/
-    function _getCardIndex(deck, card){
-        var allCards = _getAllCards(deck);
-
-        return allCards.indexOf(card);
-    }
-
-    /**  _animateCardReplacement : (DOM, DOM, DOM, string, Boolean)
-    *
-    * given a transform data map and the callbacks to fire during an animation,
-    * will animate the transition of replacing oldCard with newCard in the given
-    * deck
-    *
-    * fires a 'shufflestart' event on the x-deck when cards are in position to
-    * animate, but have not yet done so
-    *
-    * fires a 'shuffleend' event on the x-deck when the cards have finished
-    * their transition animations
-    *
-    * params:
-    *    deck                   the x-deck DOM element we are working in
-    *    oldCard                the x-card DOM element we are replacing
-    *    newCard                the x-card DOM element we are replacing
-    *                            the oldCard with
-    *    cardAnimName           the name of the animation type to use
-    *    isReverse               whether or not the animation should be reversed
-    **/
-    function _animateCardReplacement(deck, oldCard, newCard,
-                                      cardAnimName, isReverse){
-        deck.xtag._selectedCard = newCard;
-        var animTimeStamp = new Date();
-        deck.xtag._lastAnimTimestamp = animTimeStamp;
-
-        // set up an attribute-cleaning up function and callback caller function
-        // that will be fired when the animation is completed
-        var _onComplete = function(){
-            // for synchronization purposes, only set these attributes if this
-            // is actually the most recently fired timestamp
-            // otherwise, older animations interrupt newer animations and
-            // remove attributes, causing graphical flicker
-            if(animTimeStamp === deck.xtag._lastAnimTimestamp){
-                _sanitizeCardAttrs(deck);
-                xtag.fireEvent(deck, "shuffleend",
-                               {detail: {oldCard: oldCard,
-                                         newCard: newCard}});
-            }
-        };
-
-        // abort redundant transitions
-        if (newCard === oldCard){
-            _onComplete();
-            return;
-        }
-
-        var oldCardAnimReady = false;
-        var newCardAnimReady = false;
-        var animationStarted = false;
-
-        // define a helper function to call
-        // when both cards are ready to animate;
-        // necessary so that card additions aren't transitioning into the void
-        // and graphically flickering
-        var _attemptBeforeCallback = function(){
-            if(oldCardAnimReady && newCardAnimReady){
-                _getAllCards(deck).forEach(function(card){
-                    card.removeAttribute("selected");
-                    card.removeAttribute("leaving");
-                });
-                oldCard.setAttribute("leaving", true);
-                newCard.setAttribute("selected", true);
-                deck.xtag._selectedCard = newCard;
-                deck.selectedIndex = _getCardIndex(deck, newCard);
-                if(isReverse){
-                    oldCard.setAttribute("reverse", true);
-                    newCard.setAttribute("reverse", true);
-                }
-                xtag.fireEvent(deck, "shufflestart",
-                               {detail: {oldCard: oldCard,
-                                         newCard: newCard}});
-            }
-        };
-
-        // define a helper function to attempt an animation only when both
-        // cards are ready to animate
-        var _attemptAnimation = function(){
-            if(animationStarted){
-                return;
-            }
-            if(!(oldCardAnimReady && newCardAnimReady))
-            {
-                return;
-            }
-            _doAnimation();
-        };
-
-        // function to actually perform the animation of the two cards,
-        // starting from the _sanitizeCardAttrsial state and going until the end of the
-        // animation
-        var _doAnimation = function(){
-            animationStarted = true;
-
-            var oldCardDone = false;
-            var newCardDone = false;
-            var animationComplete = false;
-
-            // create the listener to be fired after the final animations
-            // have completed
-            var onTransitionComplete = function(e){
-                if(animationComplete){
-                    return;
-                }
-
-                if(e.target === oldCard){
-                    oldCardDone = true;
-                    oldCard.removeEventListener("transitionend",
-                                                 onTransitionComplete);
-                }
-                else if(e.target === newCard){
-                    newCardDone = true;
-                    newCard.removeEventListener("transitionend",
-                                                 onTransitionComplete);
-                }
-
-                if(oldCardDone && newCardDone){
-                    animationComplete = true;
-                    // actually call the completion callback function
-                    _onComplete();
-                }
-            };
-
-            // wait for both to finish sliding before firing completion callback
-            oldCard.addEventListener('transitionend', onTransitionComplete);
-            newCard.addEventListener('transitionend', onTransitionComplete);
-
-
-            // alternatively, because transitionend may not ever fire, have a
-            // fallback setTimeout to catch cases where transitionend doesn't
-            // fire (heuristic:wait some multiplier longer than actual duration)
-            var oldDuration = durationStrToMs(getDurationStr(oldCard));
-            var newDuration = durationStrToMs(getDurationStr(newCard));
-
-            var maxDuration = Math.max(oldDuration, newDuration);
-            var waitMultiplier = 1.15;
-
-            // special case on the "none" transition, which should be
-            // near instant
-            var timeoutDuration = (cardAnimName.toLowerCase() === "none") ?
-                                  0 : Math.ceil(maxDuration * waitMultiplier);
-
-            if(timeoutDuration === 0){
-                animationComplete = true;
-
-                oldCard.removeEventListener("transitionend",
-                                             onTransitionComplete);
-                newCard.removeEventListener("transitionend",
-                                             onTransitionComplete);
-                oldCard.removeAttribute(BEFORE_ANIM_ATTR);
-                newCard.removeAttribute(BEFORE_ANIM_ATTR);
-                _onComplete();
-            }
-            else{
-                // unleash the animation!
-                oldCard.removeAttribute(BEFORE_ANIM_ATTR);
-                newCard.removeAttribute(BEFORE_ANIM_ATTR);
-
-                window.setTimeout(function(){
-                    if(animationComplete){
-                        return;
-                    }
-
-                    animationComplete = true;
-
-                    oldCard.removeEventListener("transitionend",
-                                                 onTransitionComplete);
-                    newCard.removeEventListener("transitionend",
-                                                 onTransitionComplete);
-                    _onComplete();
-                }, timeoutDuration);
-            }
-        };
-
-        // finally, after setting up all these callback functions, actually
-        // start the animation by setting the old and new cards at their
-        // animation beginning states
-        xtag.skipTransition(oldCard, function(){
-            oldCard.setAttribute("card-anim-type", cardAnimName);
-            oldCard.setAttribute(BEFORE_ANIM_ATTR, true);
-
-            oldCardAnimReady = true;
-            _attemptBeforeCallback();
-
-            return _attemptAnimation;
-        }, this);
-
-        xtag.skipTransition(newCard, function(){
-            newCard.setAttribute("card-anim-type", cardAnimName);
-            newCard.setAttribute(BEFORE_ANIM_ATTR, true);
-
-            newCardAnimReady = true;
-            _attemptBeforeCallback();
-
-            return _attemptAnimation;
-        }, this);
-    }
-
-
-    /** _replaceCurrCard: (DOM, DOM, String, String, Boolean)
-
-    replaces the current card in the deck with the given newCard,
-    using the transition animation defined by the parameters
-
-    param:
-        deck             the x-deck DOM element we are working in
-        newCard                the x-card DOM element we are replacing
-                                the current card with
-        transitionType          (optional) The name of the animation type
-                                Valid options are any type defined in
-                                transitionTypeData
-                                Defaults to "scrollLeft" if not given a type
-
-        progressType            (optional)
-                                if "forward", card will use forwards animation
-                                if "reverse", card will use reverse animation
-                                if "auto", card will use forward animation if
-                                the target's is further ahead and reverse if
-                                it is farther behind (default option)
-        ignoreHistory           (optional) if true, the slide replacement will
-                                _not_ be registered to the stack's history
-                                default: false
-    **/
-    function _replaceCurrCard(deck, newCard, transitionType,
-                              progressType, ignoreHistory){
-        var oldCard = deck.xtag._selectedCard;
-
-        // avoid redundant call that doesnt actually change anything
-        // about the cards
-        if(oldCard === newCard){
-            var eDetail = {detail: {oldCard: oldCard, newCard: newCard}};
-            xtag.fireEvent(deck, "shufflestart", eDetail);
-            xtag.fireEvent(deck, "shuffleend", eDetail);
-            return;
-        }
-
-        // only call sanitize if we don't abort redundant call to avoid issue
-        // where doubletap on trigger causes graphical flicker
-        _sanitizeCardAttrs(deck);
-
-        if(transitionType === undefined){
-            console.log("defaulting to none transition");
-            transitionType = "none";
-        }
-
-        var isReverse;
-        switch (progressType){
-            case "forward":
-                isReverse = false;
-                break;
-            case "reverse":
-                isReverse = true;
-                break;
-            // automatically determine direction based on which way the target
-            // index is from our current index
-            default:
-                if(!oldCard){
-                    isReverse = false;
-                }
-                var allCards = _getAllCards(deck);
-                if(allCards.indexOf(newCard) < allCards.indexOf(oldCard)){
-                    isReverse = true;
-                }
-                else{
-                    isReverse = false;
-                }
-                break;
-        }
-
-        // check for requested animation overrides
-        if(newCard.hasAttribute("transition-override")){
-            transitionType = newCard.getAttribute("transition-override");
-        }
-
-        // register replacement to deck history, unless otherwise indicated
-        if(!ignoreHistory){
-            deck.xtag.history.pushState(newCard);
-        }
-
-        // actually perform the transition
-        _animateCardReplacement(deck, oldCard, newCard,
-                                transitionType, isReverse);
-    }
-
-
-    /** _replaceWithIndex: (DOM, Number, String, String)
-
-    transitions to the card at the given index in the deck, using the
-    given animation type
-
-    param:
-        deck                    the x-deck DOM element we are working in
-        targetIndex             the index of the x-card we want to
-                                display
-        transitionType          same as _replaceCurrCard's transitionType
-                                parameter
-
-        progressType            same as _replaceCurrCard's progressType
-                                parameter
-    **/
-    function _replaceWithIndex(deck, targetIndex, transitionType, progressType){
-        var newCard = _getCardAt(deck, targetIndex);
-
-        if(!newCard){
-            throw "no card at index " + targetIndex;
-        }
-
-        _replaceCurrCard(deck, newCard, transitionType, progressType);
-    }
-
-
-    /** _sanitizeCardAttrs: DOM
-
-    sanitizes the cards in the deck by ensuring that there is always a single
-    selected card except (and only except) when no cards exist
-
-    also removes any temp-attributes used for animation
-    **/
-    function _sanitizeCardAttrs(deck){
-        // prevent sanitizer from clobbering attributes before the deck is
-        // ready, as cards sometimes insert before deck
-        if(!deck.xtag._initialized) return;
-
-        var cards = _getAllCards(deck);
-
-        var currCard = deck.xtag._selectedCard;
-
-        if(!currCard || currCard.parentNode !== deck){
-            // if no card is yet selected, but cards still exist, match to
-            // either the most recent card in the history stack, or to the
-            // first card, if no history exists
-            if(cards.length > 0){
-                // we need to check for the existence of history, as x-cards
-                // may sometimes _sanitizeCardAttrsialize before x-decks (ie:
-                // before x-deck even has a history stack)
-                if(deck.xtag.history && deck.xtag.history.numStates > 0){
-                    currCard = deck.xtag.history.currState;
-                }
-                else{
-                    currCard = cards[0];
-                }
-            }
-            else{
-                currCard = null;
-            }
-        }
-
-        // ensure that the currCard and _only_ the currCard is selected
-        cards.forEach(function(card){
-            card.removeAttribute("leaving");
-            card.removeAttribute(BEFORE_ANIM_ATTR);
-            card.removeAttribute("card-anim-type");
-            card.removeAttribute("reverse");
-            if(card !== currCard){
-                card.removeAttribute("selected");
-            }
-            else{
-                card.setAttribute("selected", true);
-            }
+  var matchNum = /[1-9]/,
+      replaceSpaces = / /g,
+      captureTimes = /(\d|\d+?[.]?\d+?)(s|ms)(?!\w)/gi,
+      transPre = 'transition' in getComputedStyle(document.documentElement) ? 't' : xtag.prefix.js + 'T',
+      transDur = transPre + 'ransitionDuration',
+      transProp = transPre + 'ransitionProperty',
+      skipFrame = function(fn){
+        xtag.requestFrame(function(){ xtag.requestFrame(fn); });
+      },
+      ready = document.readyState == 'complete' ?
+        skipFrame(function(){ ready = false; }) :
+        xtag.addEvent(document, 'readystatechange', function(){
+          if (document.readyState == 'complete') {
+            skipFrame(function(){ ready = false; });
+            xtag.removeEvent(document, 'readystatechange', ready);
+          }
         });
 
-        deck.xtag._selectedCard = currCard;
-        deck.selectedIndex = _getCardIndex(deck, currCard);
+  function getTransitions(node){
+    node.__transitions__ = node.__transitions__ || {};
+    return node.__transitions__;
+  }
+
+  function startTransition(node, name, transitions){
+    var style = getComputedStyle(node),
+        after = transitions[name].after;
+    node.setAttribute('transition', name);
+    if (after && !style[transDur].match(matchNum)) after();
+  }
+
+  xtag.addEvents(document, {
+    transitionend: function(e){
+      var node = e.target,
+          name = node.getAttribute('transition');
+      if (name) {
+        var i = 0,
+          max = 0,
+          prop = null,
+          style = getComputedStyle(node),
+          transitions = getTransitions(node),
+          props = style[transProp].replace(replaceSpaces, '').split(',');
+        style[transDur].replace(captureTimes, function(match, time, unit){
+          time = parseFloat(time) * (unit === 's' ? 1000 : 1);
+          if (time > max) prop = i, max = time;
+          i++;
+        });
+        prop = props[prop];
+        if (!prop) throw new SyntaxError('No matching transition property found');
+        else if (e.propertyName == prop && transitions[name].after) transitions[name].after();
+      }
     }
+  });
 
+  xtag.transition = function(node, name, obj){
+    var transitions = getTransitions(node),
+        options = transitions[name] = obj || {};
+    if (options.immediate) options.immediate();
+    if (options.before) {
+      options.before();
+      if (ready) xtag.skipTransition(node, function(){
+        startTransition(node, name, transitions);
+      });
+      else skipFrame(function(){
+        startTransition(node, name, transitions);
+      });
+    }
+    else startTransition(node, name, transitions);
+  };
 
-    xtag.register("x-deck", {
-        lifecycle:{
-            created: function(){
-                var self = this;
-
-                self.xtag._initialized = true;
-                var _historyValidator = function(card){
-                                            return card.parentNode === self;
-                                        };
-                self.xtag.history = new HistoryStack(_historyValidator,
-                                                     HistoryStack.DEFAULT_CAP);
-
-                self.xtag._selectedCard = (self.xtag._selectedCard) ?
-                                           self.xtag._selectedCard : null;
-                self.xtag._lastAnimTimestamp = null;
-                self.xtag.transitionType = "scrollLeft";
-
-                // grab card at selected index and set initial card,
-                // if available
-                var initCard = self.getCardAt(
-                                  self.getAttribute("selected-index")
-                               );
-                if(initCard){
-                    self.xtag._selectedCard = initCard;
-                }
-
-                _sanitizeCardAttrs(self);
-                var currCard = self.xtag._selectedCard;
-                if(currCard){
-                    self.xtag.history.pushState(currCard);
-                }
-            }
-        },
-        events:{
-            // shuffleend is fired when done transitioning
-            "show:delegate(x-card)": function(e){
-                var card = this;
-                card.show();
-            }
-        },
-        accessors:{
-            /** transitionType
-            *
-            * handles the style of the animation that should be used when
-            * transitioning between two cards
-            **/
-            "transitionType":{
-                attribute: {name: "transition-type"},
-                get: function(){
-                    return this.xtag.transitionType;
-                },
-                set: function(newType){
-                    this.xtag.transitionType = newType;
-                }
-            },
-
-            /** selectedIndex
-             * gets/sets the index of the currently selected card
-             * note that setting this instead of using shuffleTo is equivalent
-             * to performing a "none" type transition
-            **/
-            "selectedIndex":{
-                attribute: {
-                    skip: true,
-                    name: "selected-index"
-                },
-                get: function(){
-                    return _getCardIndex(this, this.xtag._selectedCard);
-                },
-                set: function(newIndex){
-                    if(this.selectedIndex !== newIndex){
-                        _replaceWithIndex(this, newIndex, "none");
-                    }
-                    this.setAttribute("selected-index", newIndex);
-                }
-            },
-
-
-            /** historyCap
-            *
-            * get/set the maximum number of cards to keep in history at any time
-            **/
-            'historyCap': {
-                attribute: {name: "history-cap"},
-                get: function(){
-                    return this.xtag.history.itemCap;
-                },
-                set: function(itemCap){
-                    this.xtag.history.itemCap = itemCap;
-                }
-            },
-
-            /** numCards
-            *
-            * get the number of cards currently in the deck
-            **/
-            "numCards":{
-                get: function(){
-                    return this.getAllCards().length;
-                }
-            },
-
-            /** currHistorySize
-            *
-            * gets the number of cards currently in history
-            **/
-            "currHistorySize": {
-                get: function(){
-                    return this.xtag.history.numStates;
-                }
-            },
-
-            /** currHistoryIndex
-            *
-            * gets the current index that we are at in our history stack
-            **/
-            "currHistoryIndex": {
-                get: function(){
-                    return this.xtag.history.currIndex;
-                }
-            },
-
-            "cards": {
-                get: function(){
-                    return this.getAllCards();
-                }
-            },
-
-            "selectedCard": {
-                get: function(){
-                    return this.getSelectedCard();
-                }
-            }
-        },
-        methods:{
-            /** shuffleTo: (Number, String)
-
-            transitions to the card at the given index
-
-            parameters:
-                index          the index to shuffle to
-                progressType    if "forward", card will use forwards animation
-                                if "reverse", card will use reverse animation
-                                if "auto", card will use forward animation if
-                                the target's is further ahead and reverse if
-                                it is farther behind (default option)
-            **/
-            shuffleTo: function(index, progressType){
-                var targetCard = _getCardAt(this, index);
-                if(!targetCard){
-                    throw "invalid shuffleTo index " + index;
-                }
-
-                var transitionType = this.xtag.transitionType;
-
-                _replaceWithIndex(this, index, transitionType, progressType);
-            },
-
-            /** shuffleNext: (String)
-
-            transitions to the card at the next index
-
-            parameters:
-                progressType    if "forward", card will use forwards animation
-                                if "reverse", card will use reverse animation
-                                if "auto", card will use forward animation if
-                                the target's is further ahead and reverse if
-                                it is farther behind (default option)
-            **/
-            shuffleNext: function(progressType){
-                progressType = (progressType) ? progressType : "auto";
-
-                var cards = _getAllCards(this);
-                var currCard = this.xtag._selectedCard;
-                var currIndex = cards.indexOf(currCard);
-
-                if(currIndex > -1){
-                    this.shuffleTo(posModulo(currIndex+1, cards.length),
-                                   progressType);
-                }
-            },
-
-            /** shufflePrev: (String)
-
-            transitions to the card at the previous index
-
-            parameters:
-                progressType    if "forward", card will use forwards animation
-                                if "reverse", card will use reverse animation
-                                if "auto", card will use forward animation if
-                                the target's is further ahead and reverse if
-                                it is farther behind (default option)
-            **/
-            shufflePrev: function(progressType){
-                progressType = (progressType) ? progressType : "auto";
-
-                var cards = _getAllCards(this);
-                var currCard = this.xtag._selectedCard;
-                var currIndex = cards.indexOf(currCard);
-                if(currIndex > -1){
-                    this.shuffleTo(posModulo(currIndex-1, cards.length),
-                                   progressType);
-                }
-            },
-
-            /** getAllCards: => DOM array
-
-            returns a list of all x-card elements in the deck
-            **/
-            getAllCards: function(){
-                return _getAllCards(this);
-            },
-
-            /** getSelectedCard: => DOM/null
-
-            returns the currently selected x-card in the deck, if any
-            **/
-            getSelectedCard: function(){
-                return this.xtag._selectedCard;
-            },
-
-            /** getCardIndex: (DOM) => Number
-            *
-            * returns the index of the given x-card in the deck
-            * returns -1 if the given card does not exist in this deck
-            **/
-            getCardIndex: function(card){
-                return _getCardIndex(this, card);
-            },
-
-            /** getCardAt: (Number) => DOM
-            *
-            *  returns the x-card DOM element at the given index
-            *  returns null if no such card exists
-            **/
-            getCardAt: function(index){
-                return _getCardAt(this, index);
-            },
-
-
-            /** historyBack
-             *
-             * transitions to the previous card in the history stack
-             *
-             * optionally takes a progressType parameter (see shuffleTo's
-             * progressType documentation)
-            **/
-            historyBack: function(progressType){
-                var history = this.xtag.history;
-                var deck = this;
-
-                if(history.canUndo){
-                    history.backwards();
-
-                    var newCard = history.currState;
-                    if(newCard){
-                        _replaceCurrCard(this, newCard, this.transitionType,
-                                         progressType, true);
-                    }
-                }
-            },
-
-
-            /** historyForward
-             *
-             * transitions to the next card in the history stack
-             *
-             * optionally takes a progressType parameter (see shuffleTo's
-             * progressType documentation)
-            **/
-            historyForward: function(progressType){
-                var history = this.xtag.history;
-                var deck = this;
-
-                if(history.canRedo){
-                    history.forwards();
-
-                    var newCard = history.currState;
-                    if(newCard){
-                        _replaceCurrCard(this, newCard, this.transitionType,
-                                         progressType, true);
-                    }
-                }
-            }
+  xtag.pseudos.transition = {
+    onCompiled: function(fn, pseudo){
+      var options = {},
+          when = pseudo['arguments'][0] || 'immediate',
+          name = pseudo['arguments'][1] || pseudo.key.split(':')[0];
+      return function(){
+        var target = this, args = arguments;
+        if (this.hasAttribute('transition')) {
+          options[when] = function(){
+            return fn.apply(target, args);
+          };
+          xtag.transition(this, name, options);
         }
-    });
+        else return fn.apply(this, args);
+      };
+    }
+  };
 
-    xtag.register("x-card", {
-        lifecycle:{
-            inserted: function(){
-                var self = this;
-                var deckContainer = self.parentNode;
-                if (deckContainer){
-                    if(deckContainer.tagName.toLowerCase() === 'x-deck')
-                    {
-                        _sanitizeCardAttrs(deckContainer);
-                        self.xtag.parentDeck = deckContainer;
-                        xtag.fireEvent(deckContainer, "cardadd",
-                                      {detail: {"card": self}});
-                    }
-                }
+})();
 
-            },
-            created: function(){
-                var deckContainer = this.parentNode;
-                if (deckContainer &&
-                        deckContainer.tagName.toLowerCase() === 'x-deck')
-                {
-                    this.xtag.parentDeck = deckContainer;
-                }
-            },
-            removed: function(){
-                var self = this;
-                if(!self.xtag.parentDeck){
-                    return;
-                }
+(function(){
 
-                var deck = self.xtag.parentDeck;
-                deck.xtag.history.sanitizeStack();
-                _sanitizeCardAttrs(deck);
-                xtag.fireEvent(deck, "cardremove",
-                               {detail: {"card": self}});
-            }
+  var sides = {
+        next: ['nextElementSibling', 'firstElementChild'],
+        previous: ['previousElementSibling', 'lastElementChild']
+      };
+
+  function indexOfCard(deck, card){
+    return Array.prototype.indexOf.call(deck.children, card);
+  }
+
+  function getCard(deck, item){
+    return item && item.nodeName ? item : isNaN(item) ? xtag.queryChildren(deck, item) : deck.children[item];
+  }
+
+  function checkCard(deck, card, selected){
+    return card &&
+           (selected ? card == deck.xtag.selected : card != deck.xtag.selected) &&
+           deck == card.parentNode &&
+           card.nodeName == 'X-CARD';
+  }
+
+  function shuffle(deck, side, direction){
+    var getters = sides[side],
+        selected = deck.xtag.selected && deck.xtag.selected[getters[0]];
+    if (selected) deck.showCard(selected, direction);
+    else if (deck.loop || deck.selectedIndex == -1) deck.showCard(deck[getters[1]], direction);
+  }
+
+  xtag.register('x-deck', {
+    events: {
+      'reveal:delegate(x-card)': function(e){
+        if (this.parentNode == e.currentTarget) e.currentTarget.showCard(this);
+      }
+    },
+    accessors: {
+      loop: {
+        attribute: { boolean: true }
+      },
+    cards: {
+    get: function(){
+      return xtag.queryChildren(this, 'x-card');
+    }
+    },
+      selectedCard: {
+        get: function(){
+          return this.xtag.selected || null;
         },
-        accessors:{
-            "transitionOverride": {
-                attribute: {name: "transition-override"}
-            }
-        },
-        methods:{
-            // forces the shuffledeck to display this card
-            "show": function(){
-                var deck = this.parentNode;
-                if(deck === this.xtag.parentDeck){
-                    deck.shuffleTo(deck.getCardIndex(this));
-                }
-            }
+        set: function(card){
+          this.showCard(card);
         }
-    });
+      },
+      selectedIndex: {
+        attribute: {
+          name: 'selected-index',
+          unlink: true
+        },
+        get: function(){
+            return this.hasAttribute('selected-index') ? Number(this.getAttribute('selected-index')) : -1;
+        },
+        set: function(value){
+          var index = Number(value),
+              card = this.cards[index];
+          if (card) {
+            this.setAttribute('selected-index', index);
+      if (card != this.xtag.selected) this.showCard(card);
+      }
+      else {
+        this.removeAttribute('selected-index');
+        if (this.xtag.selected) this.hideCard(this.xtag.selected);
+      }
+        }
+      },
+      transitionType: {
+        attribute: { name: 'transition-type' },
+        get: function(){
+          return this.getAttribute('transition-type') || 'fade-scale';
+        }
+      }
+    },
+    methods: {
+      nextCard: function(direction){
+        shuffle(this, 'next', direction);
+      },
+      previousCard: function(direction){
+        shuffle(this, 'previous', direction);
+      },
+      showCard: function(item, direction){
+        var card = getCard(this, item);
+        if (checkCard(this, card, false)) {
+          var selected = this.xtag.selected,
+              nextIndex = indexOfCard(this, card);
+          direction = direction || (nextIndex > indexOfCard(this, selected) ? 'forward' : 'reverse');
+          if (selected) this.hideCard(selected, direction);
+          this.xtag.selected = card;
+          this.selectedIndex = nextIndex;
+          if (!card.hasAttribute('selected')) card.selected = true;
+          xtag.transition(card, 'show', {
+            before: function(){
+              card.setAttribute('show', '');
+              card.setAttribute('transition-direction', direction);
+            },
+      after: function(){
+        xtag.fireEvent(card, 'show');
+      }
+          });
+        }
+      },
+      hideCard: function(item, direction){
+        var card = getCard(this, item);
+        if (checkCard(this, card, true)) {
+          this.xtag.selected = null;
+          if (card.hasAttribute('selected')) card.selected = false;
+          xtag.transition(card, 'hide', {
+            before: function(){
+              card.removeAttribute('show');
+              card.setAttribute('hide', '');
+              card.setAttribute('transition-direction', direction || 'reverse');
+            },
+            after: function(){
+              card.removeAttribute('hide');
+              card.removeAttribute('transition');
+              card.removeAttribute('transition-direction');
+        xtag.fireEvent(card, 'hide');
+            }
+          });
+        }
+      }
+    }
+  });
+
+  xtag.register('x-card', {
+    lifecycle: {
+      inserted: function(){
+        var deck = this.parentNode;
+        if (deck.nodeName == 'X-DECK') {
+          this.xtag.deck = deck;
+          if (this != deck.selected && this.selected) deck.showCard(this);
+        }
+      },
+      removed: function(){
+        var deck = this.xtag.deck;
+        if (deck) {
+      if (this == deck.xtag.selected) {
+      deck.xtag.selected = null;
+      deck.removeAttribute('selected-index');
+      }
+          else deck.showCard(deck.selectedCard);
+          this.xtag.deck = null;
+        }
+      }
+    },
+    accessors: {
+      transitionType: {
+        attribute: { name: 'transition-type' }
+      },
+      selected: {
+        attribute: { boolean: true },
+        set: function(val){
+          var deck = this.xtag.deck;
+          if (deck) {
+            if (val && this != deck.selected) deck.showCard(this);
+            else if (!val && this == deck.selected) deck.hideCard(this);
+          }
+        }
+      }
+    }
+  });
 
 })();
 (function(){
