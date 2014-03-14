@@ -55,9 +55,9 @@
         var activeTab = xtag.query(tabEl.parentNode, "x-tabbar-tab[selected]");
         if (activeTab.length) {
             activeTab.forEach(function(t) {
-            t.removeAttribute('selected');
-        });
-    }
+              t.removeAttribute('selected');
+            });
+        }
         tabEl.setAttribute('selected', true);
     }
 
@@ -69,10 +69,10 @@
         },
         events: {
             "select:delegate(x-tabbar-tab)": function() {
-              _selectTab(this);
+                _selectTab(this);
             },
             "tap:delegate(x-tabbar-tab)": function () {
-              _selectTab(this);
+                _selectTab(this);
             }
         },
         accessors: {
