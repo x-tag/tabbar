@@ -60,9 +60,15 @@ Returns a list of the &lt;x-tabbar-tab&gt; elements in the &lt;x-tabbar&gt;.
 
 **setter**: Assigns the tab's targeted elements as the given list of elements. (If targets are assigned using this dynamic assignment, the `target-selector` attribute is removed.)
 
+# Methods
+
+## select() (x-tabbar-tab only)
+
+Selects the tab. Triggers the `select` event on that `x-tabbar-tab` too.
+
 # Events
 
-## ___show___
+## ___show___ (x-tabbar-tab only)
 
 Whenever a x-tabbar-tab is tapped/clicked, and `target-event` is not otherwise specified, a `show` event is fired on each of its target elements. It is up to the target element to respond to this event. 
 
@@ -71,3 +77,9 @@ Components with default implemented responses to `show`:
 * [Shuffledeck](https://github.com/mozilla/app-components/tree/master/shuffledeck) (`show` is applied to individual &lt;x-shuffleslide&gt;s)
 * [Slidebox](https://github.com/x-tag/slidebox) (`show` is applied to individual &lt;x-slide&gt;s)
 * [Flipbox](https://github.com/x-tag/flipbox) (`show` is applied to the front/back elements of the card)
+
+## ___select____ (x-tabbar-tab only)
+
+The `select` event is fired when the tab is explicitly selected, using its `select` method.
+
+
