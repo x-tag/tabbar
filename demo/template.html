@@ -15,7 +15,7 @@
         <x-layout>
           <section>
             <x-deck class="component-demo" transition-type="coverDown">
-              <x-card id="card1"><img src="{{REL_PATH}}site/img/dog1.png"><span>One</span></x-card>
+              <x-card id="card1" selected="true"><img src="{{REL_PATH}}site/img/dog1.png"><span>One</span></x-card>
               <x-card id="card2"><img src="{{REL_PATH}}site/img/dog2.png"><span>Two</span></x-card>
               <x-card id="card3"><img src="{{REL_PATH}}site/img/dog3.png"><span>Three</span></x-card>
               <x-card id="card4"><img src="{{REL_PATH}}site/img/dog4.png"><span>Four</span></x-card>
@@ -24,7 +24,7 @@
           </section>
           <footer>
             <x-tabbar>
-              <x-tabbar-tab target-selector="#card1">
+              <x-tabbar-tab target-selector="#card1" selected="true">
                 One
               </x-tabbar-tab>
               <x-tabbar-tab target-selector="#card2">
