@@ -15,8 +15,7 @@
     "src/tabbar.styl"
   ],
   "dependencies": {
-    "x-tag-core": "*",
-    "brick-common": "*"
+    "x-tag-core": "*"
   },
   "devDependencies": {
     "x-tag-iconbutton": "*",
